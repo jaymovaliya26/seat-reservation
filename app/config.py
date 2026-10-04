@@ -1,0 +1,36 @@
+"""Runtime settings, read from environment variables (and from .env in local development)."""
+
+from typing import Self
+
+from pydantic import Field, SecretStr, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", frozen=True)
+
+    database_url: str
+    jwt_secret: SecretStr
+    admin_api_key: SecretStr
+
+    # Per worker process. Workers x db_pool_max must stay below Postgres max_connections.
+    db_pool_min: int = Field(default=2, ge=1)
+    db_pool_max: int = Field(default=15, ge=1)
+
+    # Applied to every pooled connection, so no query or lock wait can hang a request forever.
+    db_statement_timeout_ms: int = Field(default=5000, ge=0)
+    db_lock_timeout_ms: int = Field(default=5000, ge=0)
+    db_idle_in_transaction_timeout_ms: int = Field(default=10000, ge=0)
+
+    # How long startup keeps retrying while Postgres is unreachable (cold starts, redeploys).
+    db_startup_timeout_s: float = Field(default=60.0, gt=0)
+    readiness_timeout_s: float = Field(default=1.0, gt=0)
+
+    default_per_user_limit: int = Field(default=4, ge=1)
+    log_level: str = "INFO"
+
+    @model_validator(mode="after")
+    def _pool_bounds(self) -> Self:
+        if self.db_pool_min > self.db_pool_max:
+            raise ValueError("db_pool_min must not exceed db_pool_max")
+        return self

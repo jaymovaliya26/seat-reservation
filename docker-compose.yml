@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: seats
+    ports:
+      - "5433:5432" # 5433 on the host, so it never clashes with a local Postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d seats"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
