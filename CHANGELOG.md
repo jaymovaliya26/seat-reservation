@@ -2,6 +2,26 @@
 
 All notable changes to this project are recorded here. Releases are tagged in git.
 
+## v0.5.0 (2026-10-04): ready for the stampede
+
+### Added
+- `./scripts/burst.sh <BASE_URL> [ADMIN_KEY]` (also `make burst`): 20,000 reserve requests across six on-sale scenarios, then 25 correctness checks; exits 1 on any failure.
+- `docs/PERFORMANCE.md`: live and local measurements, and what they changed.
+- Metrics: `reserve_requests_without_idempotency_key_total`, `spoofed_user_id_total`, `log_lines_suppressed_total`.
+
+### Changed
+- **Fast decline:** a request whose seats already belong to someone else gets `409` from one read instead of a write transaction (Postgres CPU per request −44%).
+- **Connection budget:** pools are 8 per worker and open in full at startup (36 connections per instance, 72 during a deploy overlap, under Postgres's 100). Railway's `DB_POOL_MAX` changed from 15 to 8.
+- **Log budget:** at most 100 request lines/s per worker, under Railway's 500 lines/s limit; skipped lines are summarised each second, and 5xx lines are always kept.
+
+### Fixed
+- A deploy overlap could exhaust Postgres connections and turn requests into 500s (reproduced as 7,155 × 500 in a benchmark). Refused connections are now also retried.
+- Railway was silently dropping about 28,800 log lines during a burst.
+- The Gunicorn control socket logged an error at boot; it's now disabled.
+
+### Live result
+20,000-request burst against the live URL: 1,130 req/s, p50 344 ms, p99 1.3 s, 0 × 5xx, 25/25 checks (v0.4 was 825 req/s, p99 1.7 s).
+
 ## v0.4.0 (2026-10-04): observability
 
 ### Added

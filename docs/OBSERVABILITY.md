@@ -39,6 +39,9 @@ Gunicorn runs 4 worker processes, and a scrape reaches only one of them. Prometh
 | `http_request_duration_seconds{method,route}` | histogram | Latency, for p50/p99 |
 | `db_pool_connections{state}` | gauge | `in_use`, `idle` and `max` connections summed over live workers (sampled every 5s) |
 | `db_transaction_retries_total{sqlstate}` | counter | Transactions rerun after a deadlock (`40P01`) or serialization failure (`40001`) |
+| `reserve_requests_without_idempotency_key_total` | counter | Reserve requests that weren't retry-safe |
+| `spoofed_user_id_total` | counter | Requests whose body named another user (ignored) |
+| `log_lines_suppressed_total` | counter | Request log lines skipped by the log budget |
 | `app_info{version}` | gauge | The running version |
 
 **How the numbers reconcile.** For any window of reserve traffic:
@@ -64,6 +67,7 @@ One JSON object per line on stdout:
 - **Request context.** `user_id`, `show_id`, `outcome` (`confirmed`, `replayed`, `cancelled`), `reservation_id` and `error_code` are attached to the request's line.
 - **Unhandled errors** log `unhandled_error` with the stack trace and the same `request_id`.
 - **Everything else is JSON too.** Gunicorn, Uvicorn and asyncpg lines use the same shape, with a `component` field.
+- **Log budget.** Railway keeps at most 500 lines per second per replica and silently drops the rest. Each worker therefore writes at most 100 request lines per second (`LOG_REQUEST_LINES_PER_SECOND`), and 5xx lines are always written. Skipped lines become one `request_lines_suppressed` summary per second with counts by status, and are counted in `log_lines_suppressed_total`. Every request is still counted in `/metrics`, and every booking is a row in Postgres.
 
 ## Health
 

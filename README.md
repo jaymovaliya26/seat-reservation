@@ -6,7 +6,32 @@ A JSON API that sells assigned seats for a show and guarantees each seat is sold
 
 **Live:** https://seat-reservation-jm.up.railway.app (Railway, Singapore)
 
-> Status: **v0.4.0**: atomic reservations, idempotency keys, a per-user seat limit, owner-only cancel, a reconcile audit, and Prometheus metrics. The one-command burst script arrives next; see [docs/ROADMAP.md](docs/ROADMAP.md).
+> Status: **v0.5.0**: atomic reservations, idempotency keys, a per-user seat limit, owner-only cancel, a reconcile audit, Prometheus metrics, and a one-command burst that proves it all under load. See [docs/ROADMAP.md](docs/ROADMAP.md).
+
+## Burst it (one command)
+
+```bash
+./scripts/burst.sh https://seat-reservation-jm.up.railway.app <ADMIN_KEY>   # live
+./scripts/burst.sh http://localhost:8000                                    # local stack
+```
+
+It creates a fresh show and fires **20,000 reserve requests**, 500 at a time:
+- **Hot seats (40%):** 5 seats, 1,600 buyers each.
+- **Overlapping multi-seat requests (15%).**
+- **Racing retries (15%):** idempotency keys sent 5 times at once.
+- **Per-user floods:** 50 users × 10 parallel requests against a limit of 4.
+- **Spoofed identities:** a different `user_id` in the body.
+- **Random seats:** the rest.
+
+It prints throughput, latency, outcomes by status and decline reason, and the 5xx count. Then it **checks every requirement and exits 1 if any fails**:
+- exactly one `201` per hot seat, and no seat sold twice;
+- one booking per idempotency key, with late retries replayed and reused keys refused;
+- no user above the limit, and identity taken from the token;
+- the counts add up at every mid-burst snapshot and at the end;
+- `/metrics` deltas equal the responses;
+- the server's reconcile audit passes.
+
+Needs [uv](https://docs.astral.sh/uv/); falls back to Docker. Flags: `--requests`, `--concurrency`, `--timeout`. Results and what tuning changed: [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 ## Run it locally
 
@@ -88,7 +113,7 @@ Every transaction takes its locks in the same order: the idempotency key (or the
 ## Observe it
 
 - **Metrics:** `GET /metrics`. Totals add up across all Gunicorn workers, and the seat gauges are read from Postgres, so they always match the API. During a burst: `watch -n1 "curl -s $BASE/metrics | grep -E '^(reservations_|seats_)'"`.
-- **Logs:** one JSON line per request with `request_id` (also returned in the `X-Request-ID` header and every error body), `user_id`, `show_id`, outcome and error code. Live: `railway logs --service app`.
+- **Logs:** one JSON line per request with `request_id` (also returned in the `X-Request-ID` header and every error body), `user_id`, `show_id`, outcome and error code. They're capped at 100 request lines/s per worker, under Railway's 500 lines/s limit; anything skipped is summarised each second, and 5xx lines are always kept. Live: `railway logs --service app`.
 - **Audit:** `GET /admin/shows/{id}/reconcile`.
 - **Alerts:** rules in [`ops/prometheus/alerts.yml`](ops/prometheus/alerts.yml). Run Prometheus locally with `docker compose --profile observability up -d` (port 9090).
 - **Smoke test any deployment:** `scripts/smoke.sh <BASE_URL> <ADMIN_KEY>` races 20 buyers for one seat and checks that the metrics and the audit agree with the outcomes.
