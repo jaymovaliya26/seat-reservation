@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -6,7 +7,7 @@ from pathlib import Path
 import asyncpg
 import pytest
 
-from app.migrate import MigrationError, load_migrations, run_migrations
+from app.migrate import MIGRATIONS_DIR, MigrationError, load_migrations, run_migrations
 
 
 async def _applied_versions(database_url: str) -> list[str]:
@@ -122,3 +123,65 @@ class TestSchemaGuards:
                 " VALUES ($1, 'free', 0, 4, 1)",
                 uuid.uuid4(),
             )
+
+
+async def test_upgrading_a_v0_1_database_keeps_existing_bookings(
+    empty_database_url: str, tmp_path: Path
+) -> None:
+    v0_1 = tmp_path / "v0.1"
+    v0_1.mkdir()
+    shutil.copy(MIGRATIONS_DIR / "0001_init.sql", v0_1)
+    await run_migrations(empty_database_url, v0_1)
+
+    conn = await asyncpg.connect(empty_database_url)
+    try:
+        show_id, alice_res, bob_res = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        await conn.execute(
+            "INSERT INTO shows (id, name, price_paise, per_user_limit, total_seats)"
+            " VALUES ($1, 'old', 100, 4, 3)",
+            show_id,
+        )
+        await conn.execute(
+            "INSERT INTO seats (show_id, label, position) VALUES ($1, 'A1', 1), ($1, 'A2', 2),"
+            " ($1, 'A3', 3)",
+            show_id,
+        )
+        for res_id, user, seats in ((alice_res, "alice", ["A1", "A2"]), (bob_res, "bob", ["A3"])):
+            await conn.execute(
+                "INSERT INTO reservations (id, show_id, user_id, seats, amount_paise, status)"
+                " VALUES ($1, $2, $3, $4, 100, 'confirmed')",
+                res_id,
+                show_id,
+                user,
+                seats,
+            )
+            await conn.execute(
+                "UPDATE seats SET status = 'confirmed', reservation_id = $1, user_id = $2"
+                " WHERE show_id = $3 AND label = ANY($4)",
+                res_id,
+                user,
+                show_id,
+                seats,
+            )
+
+        assert await run_migrations(empty_database_url) == [
+            "0002_idempotency",
+            "0003_user_show_holdings",
+        ]
+
+        holdings = dict(
+            await conn.fetch("SELECT user_id, seat_count FROM user_show_holdings ORDER BY 1")
+        )
+        assert holdings == {"alice": 2, "bob": 1}
+        keys = [r["idempotency_key"] for r in await conn.fetch("SELECT * FROM reservations")]
+        assert len(set(keys)) == 2 and all(key.startswith("auto:") for key in keys)
+
+        # A writer that predates keys (the old version during a rolling deploy) still works.
+        await conn.execute(
+            "INSERT INTO reservations (id, show_id, user_id, seats, amount_paise, status)"
+            " VALUES ($1, $2, 'carol', ARRAY['A9'], 100, 'confirmed')",
+            uuid.uuid4(),
+            show_id,
+        )
+    finally:
+        await conn.close()
