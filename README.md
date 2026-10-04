@@ -6,7 +6,7 @@ A JSON API that sells assigned seats for a show and guarantees each seat is sold
 
 **Live:** https://seat-reservation-jm.up.railway.app (Railway, Singapore)
 
-> Status: **v0.3.0**: atomic reservations, idempotency keys, a per-user seat limit, owner-only cancel, and a reconcile audit. Metrics and the burst script arrive in the next releases; see [docs/ROADMAP.md](docs/ROADMAP.md).
+> Status: **v0.4.0**: atomic reservations, idempotency keys, a per-user seat limit, owner-only cancel, a reconcile audit, and Prometheus metrics. The one-command burst script arrives next; see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Run it locally
 
@@ -54,6 +54,7 @@ curl -s $BASE/admin/shows/$SHOW/reconcile -H "X-Admin-Key: $ADMIN_KEY" | jq '{ok
 | `GET /reservations/{id}` | `Bearer` | Your own reservation; anyone else's is `404` |
 | `POST /reservations/{id}/cancel` | `Bearer` | `200` with status `cancelled`, seats back on sale at once; `409 already_cancelled`; `404` if not yours |
 | `GET /admin/shows/{id}/reconcile` | `X-Admin-Key` | Audits the show's books in one consistent snapshot: `ok` plus seven checks (counts add up, no seat sold twice, seats match reservations, holdings match seats, limits, exact amounts) |
+| `GET /metrics` | none | Prometheus metrics: outcomes by reason, live seat gauges, latency, pool use |
 | `GET /healthz` | none | `200` while the process is alive |
 | `GET /readyz` | none | `200` if Postgres answers within 1s, else `503` |
 
@@ -83,6 +84,16 @@ One SQL statement in [`app/services/reservations.py`](app/services/reservations.
 Every transaction takes its locks in the same order: the idempotency key (or the reservation row for a cancel), then holdings, then seats by label.
 
 [`tests/test_concurrency.py`](tests/test_concurrency.py) proves this with 500 parallel buyers for one seat and 300 buyers with overlapping multi-seat requests; [`tests/test_idempotency.py`](tests/test_idempotency.py) and [`tests/test_user_limit.py`](tests/test_user_limit.py) cover 50 parallel retries and 10 parallel requests against a limit of 4.
+
+## Observe it
+
+- **Metrics:** `GET /metrics`. Totals add up across all Gunicorn workers, and the seat gauges are read from Postgres, so they always match the API. During a burst: `watch -n1 "curl -s $BASE/metrics | grep -E '^(reservations_|seats_)'"`.
+- **Logs:** one JSON line per request with `request_id` (also returned in the `X-Request-ID` header and every error body), `user_id`, `show_id`, outcome and error code. Live: `railway logs --service app`.
+- **Audit:** `GET /admin/shows/{id}/reconcile`.
+- **Alerts:** rules in [`ops/prometheus/alerts.yml`](ops/prometheus/alerts.yml). Run Prometheus locally with `docker compose --profile observability up -d` (port 9090).
+- **Smoke test any deployment:** `scripts/smoke.sh <BASE_URL> <ADMIN_KEY>` races 20 buyers for one seat and checks that the metrics and the audit agree with the outcomes.
+
+Details, including what pages at 2am: [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
 
 ## Development
 

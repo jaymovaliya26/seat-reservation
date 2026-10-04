@@ -2,6 +2,15 @@
 
 All notable changes to this project are recorded here. Releases are tagged in git.
 
+## v0.4.0 (2026-10-04): observability
+
+### Added
+- `GET /metrics`: reservation outcomes by reason, seat gauges and an invariant gauge per show (read from Postgres at scrape time), HTTP request counts and latency by route template, database pool use, transaction retries, version. Prometheus multiprocess mode sums all Gunicorn workers.
+- JSON logs for the Gunicorn master too; request lines now carry `outcome`, `reservation_id` and `error_code`.
+- `scripts/smoke.sh`: a 20-buyer race, then checks that metrics and the reconcile audit agree with the outcomes. CI runs it against the 4-worker container on every push.
+- Alert rules in `ops/prometheus/alerts.yml` (validated with promtool), an optional local Prometheus (`docker compose --profile observability up`), and `docs/OBSERVABILITY.md`.
+- 4 new tests (108 total).
+
 ## v0.3.0 (2026-10-04): release seats and prove the books balance
 
 ### Added
