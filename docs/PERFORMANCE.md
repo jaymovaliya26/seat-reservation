@@ -20,6 +20,7 @@ Every run had **0 × 5xx and passed all 25 checks**, except the one run marked o
 | v0.5 (fast decline, connection fix) | 1,130 req/s | 344 ms | 1,314 ms | 2,805 ms |
 | v0.5.0 (plus log budget) | 1,244 req/s | 308 ms | 1,128 ms | 2,108 ms |
 | v1.0 candidate (plus wall-clock log windows, 503 handling) | 1,369 req/s | 291 ms | 1,011 ms | 1,629 ms |
+| v1.0.0 (log cap 25 per worker) | 1,294 req/s | 298 ms | 1,103 ms | 1,839 ms |
 
 Railway's own server-side measurement for the v0.5 run was p50 245 ms and p99 1,206 ms. The rest of the client-side latency is the network and TLS between India and Singapore.
 
@@ -48,7 +49,7 @@ Run-to-run noise is roughly ±15%. The comparisons that matter come from back-to
 
 **3. Railway dropped most of the logs.** Railway keeps at most 500 log lines per second per replica. During the live burst it dropped about 28,800 lines, at random.
 
-*Change:* a per-worker **log budget**. Server errors are always logged; skipped lines are summarised once a second and counted in `log_lines_suppressed_total`. At 100 lines/s per worker, the live burst lost 1,578 lines instead of 28,800. Two problems remained. Each worker's one-second window started at an arbitrary moment, so a worker could write up to twice its cap within one real second. And Railway dropped lines even in seconds where only about 400 were stored. The windows are now whole wall-clock seconds. At 50 per worker, Railway still dropped 992 lines: its notices then said "rate limit reached for deployment", a second limit that kicks in at roughly 250 lines/s. The cap is now 25 per worker (100/s in total). Locally the same burst writes 2,734 lines instead of 19,954, and the app spends about 10% less CPU per request.
+*Change:* a per-worker **log budget**. Server errors are always logged; skipped lines are summarised once a second and counted in `log_lines_suppressed_total`. At 100 lines/s per worker, the live burst lost 1,578 lines instead of 28,800. Two problems remained. Each worker's one-second window started at an arbitrary moment, so a worker could write up to twice its cap within one real second. And Railway dropped lines even in seconds where only about 400 were stored. The windows are now whole wall-clock seconds. At 50 per worker, Railway still dropped 992 lines: its notices then said "rate limit reached for deployment", a second limit that kicks in at roughly 250 lines/s. The cap is now 25 per worker (100/s in total). On the v1.0.0 live burst, Railway kept every line written: 1,805 request lines plus 72 per-second summaries, with zero drops. Locally the same burst writes 2,734 lines instead of 19,954, and the app spends about 10% less CPU per request.
 
 **4. Where the time goes now.** Live, the app is the bottleneck: it's CPU-bound at its 2 vCPU limit, while Postgres has headroom. Locally the same image does about 4,000 req/s, which suggests Railway's vCPUs are several times slower than a laptop core.
 
