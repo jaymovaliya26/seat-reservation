@@ -2,7 +2,9 @@
 
 All notable changes to this project are recorded here. Releases are tagged in git.
 
-## Unreleased
+## v1.0.0 (2026-10-04): submission
+
+Live at https://seat-reservation-jm.up.railway.app. Final live burst: 20,000 requests, 1,369 req/s, p99 1.0 s, 0 × 5xx, 25/25 checks. A fresh clone runs with no setup; a hard restart is back in about 2 s.
 
 ### Added
 - `WRITEUP.md`: the atomic decision, idempotency, holds, the consistency choice, alerting, AI usage, and next steps.
