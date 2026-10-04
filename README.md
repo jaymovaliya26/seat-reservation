@@ -15,6 +15,7 @@ A JSON API that sells assigned seats for a show and guarantees each seat is sold
 | **Health** | [`/healthz`](https://seat-reservation-jm.up.railway.app/healthz) (process alive), [`/readyz`](https://seat-reservation-jm.up.railway.app/readyz) (Postgres reachable, else 503) |
 | **Logs** | JSON on stdout with `request_id`; a recording of the live logs during a burst is linked in the submission email |
 | **Write-up** | [WRITEUP.md](WRITEUP.md): the atomic decision, idempotency, holds, CAP choice, alerting, AI usage, what's next |
+| **Features** | [docs/FEATURES.md](docs/FEATURES.md): all 30 features, each explained in plain words and technically, with where it lives and what proves it |
 | **Admin key** | needed for `POST /shows` on the live URL; sent with the submission. The local stack uses `local-dev-admin-key` |
 
 **Latest live burst:** 20,000 requests, **0 × 5xx**, all 25 correctness checks passed, 1,244 req/s, p99 1.1s, measured from India to Singapore. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
@@ -144,7 +145,7 @@ Details, including what pages at 2am: [docs/OBSERVABILITY.md](docs/OBSERVABILITY
 | [`tests/`](tests) | 128 tests against a real Postgres, including 500-connection races |
 | [`scripts/burst.sh`](scripts/burst.sh), [`scripts/smoke.sh`](scripts/smoke.sh) | Load and correctness checks for any deployment |
 | [`ops/prometheus/`](ops/prometheus) | Alert rules and a local Prometheus |
-| [`docs/`](docs) | OpenAPI spec, observability, performance, roadmap, AI usage log |
+| [`docs/`](docs) | Features, OpenAPI spec, observability, performance, roadmap, AI usage log |
 
 ## Development
 
