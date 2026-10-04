@@ -103,7 +103,7 @@ In the burst, 600 keys each sent 5 times at once produce exactly 600 bookings.
 
 The burst checks that the `/metrics` deltas equal the client-observed outcomes exactly.
 
-**Logs.** One JSON line per request with `request_id`, which is also returned in a header and in every error body. Railway silently drops lines above about 500 per second, so each worker writes at most 50 request lines per second. 5xx lines are always written, and skipped lines are summarised each second and counted.
+**Logs.** One JSON line per request with `request_id`, which is also returned in a header and in every error body. Railway silently drops lines above roughly 250 per second per deployment, so each worker writes at most 25 request lines per second. 5xx lines are always written, and skipped lines are summarised each second and counted.
 
 **What pages** (rules in [`ops/prometheus/alerts.yml`](ops/prometheus/alerts.yml), validated with promtool):
 - **`SeatInvariantBroken`, immediately.** The counts don't add up, so seats or money are wrong. The only alert with no grace period.

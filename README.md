@@ -123,7 +123,7 @@ Every transaction takes its locks in the same order: the idempotency key (or the
 ## Observe it
 
 - **Metrics:** `GET /metrics`. Totals add up across all Gunicorn workers, and the seat gauges are read from Postgres, so they always match the API. During a burst: `watch -n1 "curl -s $BASE/metrics | grep -E '^(reservations_|seats_)'"`.
-- **Logs:** one JSON line per request with `request_id` (also returned in the `X-Request-ID` header and every error body), `user_id`, `show_id`, outcome and error code. They're capped at 50 request lines/s per worker, well under Railway's ~500 lines/s limit; anything skipped is summarised each second, and 5xx lines are always kept. Live: `railway logs --service app`.
+- **Logs:** one JSON line per request with `request_id` (also returned in the `X-Request-ID` header and every error body), `user_id`, `show_id`, outcome and error code. They're capped at 25 request lines/s per worker (100/s in total), under Railway's logging limits; anything skipped is summarised each second, and 5xx lines are always kept. Live: `railway logs --service app`.
 - **Audit:** `GET /admin/shows/{id}/reconcile`.
 - **Alerts:** rules in [`ops/prometheus/alerts.yml`](ops/prometheus/alerts.yml). Run Prometheus locally with `docker compose --profile observability up -d` (port 9090).
 - **Smoke test any deployment:** `scripts/smoke.sh <BASE_URL> <ADMIN_KEY>` races 20 buyers for one seat and checks that the metrics and the audit agree with the outcomes.
