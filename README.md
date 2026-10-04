@@ -4,9 +4,19 @@
 
 A JSON API that sells assigned seats for a show and guarantees each seat is sold exactly once, even when thousands of buyers try to book the same seat in the same second.
 
-**Live:** https://seat-reservation-jm.up.railway.app (Railway, Singapore)
+## For reviewers
 
-> Status: **v0.5.0**: atomic reservations, idempotency keys, a per-user seat limit, owner-only cancel, a reconcile audit, Prometheus metrics, and a one-command burst that proves it all under load. See [docs/ROADMAP.md](docs/ROADMAP.md).
+| | |
+|---|---|
+| **Live URL** | https://seat-reservation-jm.up.railway.app (Railway, Singapore) |
+| **One-command burst** | `./scripts/burst.sh https://seat-reservation-jm.up.railway.app <ADMIN_KEY>` |
+| **Metrics** | https://seat-reservation-jm.up.railway.app/metrics |
+| **Health** | [`/healthz`](https://seat-reservation-jm.up.railway.app/healthz) (process alive), [`/readyz`](https://seat-reservation-jm.up.railway.app/readyz) (Postgres reachable, else 503) |
+| **Logs** | JSON on stdout with `request_id`; a recording of the live logs during a burst is linked in the submission email |
+| **Write-up** | [WRITEUP.md](WRITEUP.md): the atomic decision, idempotency, holds, CAP choice, alerting, AI usage, what's next |
+| **Admin key** | needed for `POST /shows` on the live URL; sent with the submission. The local stack uses `local-dev-admin-key` |
+
+**Latest live burst:** 20,000 requests, **0 × 5xx**, all 25 correctness checks passed, 1,244 req/s, p99 1.1s, measured from India to Singapore. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 ## Burst it (one command)
 
@@ -87,7 +97,7 @@ The idempotency key can go in the `Idempotency-Key` header or the `idempotency_k
 
 Each user may hold at most `per_user_limit` seats per show (default 4), enforced even when the user sends many requests in parallel.
 
-Money is always integer paise; `250.5`, `25000.0` and `"25000"` are rejected. Identity comes only from the token: a `user_id` in a request body is ignored. Every error has the same shape:
+Money is always integer paise; `250.5`, `25000.0` and `"25000"` are rejected. Identity comes only from the token: a `user_id` in a request body is ignored. If Postgres can't be reached, requests fail closed with `503 database_unavailable` and `Retry-After: 1`; retrying with the same idempotency key is always safe. Every error has the same shape:
 
 ```json
 {"error": {"code": "seat_taken", "message": "Seats already taken: A12", "seats": ["A12"]}, "request_id": "..."}
@@ -119,6 +129,19 @@ Every transaction takes its locks in the same order: the idempotency key (or the
 - **Smoke test any deployment:** `scripts/smoke.sh <BASE_URL> <ADMIN_KEY>` races 20 buyers for one seat and checks that the metrics and the audit agree with the outcomes.
 
 Details, including what pages at 2am: [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
+
+## Repository map
+
+| Path | What's there |
+|---|---|
+| [`app/services/reservations.py`](app/services/reservations.py) | The seat decision: fast decline, idempotency, holdings, the locked claim, cancel |
+| [`app/services/reconcile.py`](app/services/reconcile.py) | The seven-check audit |
+| [`migrations/`](migrations) | Schema, in order; the constraints that make a double sale unstorable |
+| [`app/observability/`](app/observability) | Metrics (multiprocess), JSON logs, request IDs, log budget |
+| [`tests/`](tests) | 128 tests against a real Postgres, including 500-connection races |
+| [`scripts/burst.sh`](scripts/burst.sh), [`scripts/smoke.sh`](scripts/smoke.sh) | Load and correctness checks for any deployment |
+| [`ops/prometheus/`](ops/prometheus) | Alert rules and a local Prometheus |
+| [`docs/`](docs) | Observability, performance, roadmap, AI usage log |
 
 ## Development
 

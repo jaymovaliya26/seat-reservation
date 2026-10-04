@@ -4,7 +4,12 @@ All notable changes to this project are recorded here. Releases are tagged in gi
 
 ## Unreleased
 
+### Added
+- `WRITEUP.md`: the atomic decision, idempotency, holds, the consistency choice, alerting, AI usage, and next steps.
+- README: a reviewer section and a repository map.
+
 ### Fixed
+- When Postgres is unreachable, requests now fail closed with `503 database_unavailable` (or `503 database_busy` on a database timeout), with `Retry-After: 1`, instead of a generic 500. Found by stopping Postgres under the running stack: the database hostname stopped resolving (`socket.gaierror`).
 - The log budget still let Railway drop 1,578 lines in a live burst: per-worker windows started at arbitrary moments, so a worker could write twice its cap within one wall-clock second. Windows are now whole wall-clock seconds, and the default cap is 50 lines/s per worker (200/s in total).
 
 ## v0.5.0 (2026-10-04): ready for the stampede
