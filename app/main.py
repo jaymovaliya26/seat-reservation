@@ -14,6 +14,7 @@ from app import __version__
 from app.api import health
 from app.config import Settings
 from app.db import Database
+from app.migrate import run_migrations
 from app.observability.logging import configure_logging
 from app.observability.middleware import RequestContextMiddleware
 
@@ -26,8 +27,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # A worker accepts no requests until this block finishes, so it never serves traffic
+        # against an old schema. If a migration fails, the worker fails to boot and the
+        # platform restarts the container.
         db = Database(settings)
         await db.connect()
+        await run_migrations(settings.database_url)
         app.state.db = db
         log.info("startup_complete", version=__version__)
         try:

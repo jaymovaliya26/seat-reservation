@@ -20,6 +20,7 @@ WORKDIR /app
 COPY --from=build /opt/venv /opt/venv
 COPY gunicorn.conf.py ./
 COPY app ./app
+COPY migrations ./migrations
 USER app
 EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \

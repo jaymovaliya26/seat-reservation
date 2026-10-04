@@ -42,22 +42,38 @@ def _free_port() -> int:
         return port
 
 
-@pytest.fixture(scope="session")
-async def database_url() -> AsyncIterator[str]:
+async def _create_database() -> str:
     name = f"test_{uuid.uuid4().hex[:12]}"
     conn = await asyncpg.connect(ADMIN_DSN)
     try:
         await conn.execute(f'CREATE DATABASE "{name}"')
     finally:
         await conn.close()
+    return name
 
-    yield _with_database(ADMIN_DSN, name)
 
+async def _drop_database(name: str) -> None:
     conn = await asyncpg.connect(ADMIN_DSN)
     try:
         await conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
     finally:
         await conn.close()
+
+
+@pytest.fixture(scope="session")
+async def database_url() -> AsyncIterator[str]:
+    """One database for the whole session; the live server migrates it on startup."""
+    name = await _create_database()
+    yield _with_database(ADMIN_DSN, name)
+    await _drop_database(name)
+
+
+@pytest.fixture
+async def empty_database_url() -> AsyncIterator[str]:
+    """A brand-new, unmigrated database for a single test."""
+    name = await _create_database()
+    yield _with_database(ADMIN_DSN, name)
+    await _drop_database(name)
 
 
 def make_settings(database_url: str, **overrides: object) -> Settings:
