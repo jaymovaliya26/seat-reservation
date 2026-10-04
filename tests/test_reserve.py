@@ -159,3 +159,34 @@ class TestShowCatalog:
             await pool.close()
 
         assert info is not None and info.seat_labels == {"A1"}
+
+
+async def test_fast_decline_answers_seat_taken_before_any_write(
+    client: httpx.AsyncClient, db: asyncpg.Connection
+) -> None:
+    """A seat already sold to someone else is declined from one read: no reservation row is
+    written, and even a user who is at their limit hears 'seat_taken', the real reason."""
+    show_id = await create_show(client, ["A1", "A2", "A3", "A4", "A5", "A6"], per_user_limit=4)
+    await reserve(client, show_id, "fd-bob", ["A6"])
+    await reserve(client, show_id, "fd-alice", ["A1", "A2", "A3", "A4"])
+    rows_before = await db.fetchval("SELECT count(*) FROM reservations")
+
+    response = await reserve(client, show_id, "fd-alice", ["A6"])
+
+    assert response.json()["error"] == {
+        "code": "seat_taken",
+        "message": "Seats already taken: A6",
+        "seats": ["A6"],
+    }
+    assert await db.fetchval("SELECT count(*) FROM reservations") == rows_before
+
+
+async def test_rebooking_your_own_seat_with_a_new_key_is_still_409(
+    client: httpx.AsyncClient,
+) -> None:
+    show_id = await create_show(client, ["A1"])
+    first = await reserve(client, show_id, "own-alice", ["A1"], idempotency_key="own-1")
+    again = await reserve(client, show_id, "own-alice", ["A1"], idempotency_key="own-2")
+    assert first.status_code == 201
+    assert again.status_code == 409
+    assert again.json()["error"]["code"] == "seat_taken"

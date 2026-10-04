@@ -40,6 +40,16 @@ SELECT id, show_id, user_id, seats, amount_paise, status, created_at, request_ha
  WHERE user_id = $1 AND idempotency_key = $2
 """
 
+_TAKEN_BY_OTHERS = """
+SELECT label
+  FROM seats
+ WHERE show_id = $1
+   AND label = ANY($2::text[])
+   AND status <> 'available'
+   AND user_id <> $3
+ ORDER BY label
+"""
+
 # Step 1. If a request with this key is in flight, this INSERT waits for it on the unique index.
 # If that request commits, the conflict makes this a no-op (no row returned) and we replay it.
 _INSERT_RESERVATION = """
@@ -126,10 +136,23 @@ async def reserve(
             requested=len(wanted),
         )
 
-    if idempotency_key is None:
-        key = f"auto:{uuid.uuid4()}"
-    else:
-        key = idempotency_key
+    key = idempotency_key if idempotency_key is not None else f"auto:{uuid.uuid4()}"
+    # The same key on every attempt, so a retry after an unclear failure replays, never books twice.
+    return await with_retries(
+        lambda: _attempt(pool, show, user_id, wanted, key, idempotency_key is not None, fingerprint)
+    )
+
+
+async def _attempt(
+    pool: asyncpg.Pool,
+    show: ShowInfo,
+    user_id: str,
+    wanted: list[str],
+    key: str,
+    client_sent_key: bool,
+    fingerprint: bytes,
+) -> ReserveResult:
+    if client_sent_key:
         # Retries are common (timeouts, impatient clients). Answer them from the stored
         # reservation without opening a write transaction. The transaction below still handles
         # retries that race with the original.
@@ -137,7 +160,17 @@ async def reserve(
         if existing is not None:
             return _replay(existing, fingerprint)
 
-    return await with_retries(lambda: _reserve_once(pool, show, user_id, wanted, key, fingerprint))
+    # Fast decline. In an on-sale most requests lose, and a loser would otherwise pay for a whole
+    # write transaction (insert, holdings, claim, rollback). One indexed read answers it instead.
+    # Safe because a stale read errs only one way: a seat seen as taken really was taken at that
+    # moment, while a seat seen as free still goes through the locked claim below. Seats held by
+    # this same user are left to the transaction, so a racing retry becomes a replay, not a 409.
+    taken = await pool.fetch(_TAKEN_BY_OTHERS, show.id, wanted, user_id)
+    if taken:
+        labels = [row["label"] for row in taken]
+        raise SeatTaken("Seats already taken: " + ", ".join(labels), seats=labels)
+
+    return await _reserve_once(pool, show, user_id, wanted, key, fingerprint)
 
 
 async def _reserve_once(
