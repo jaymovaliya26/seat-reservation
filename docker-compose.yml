@@ -32,5 +32,16 @@ services:
       - "8000:8000"
     restart: unless-stopped
 
+  # Optional: watch a burst live with the alert rules loaded.
+  #   docker compose --profile observability up -d   ->  http://localhost:9090
+  prometheus:
+    image: prom/prometheus:v3.6.0
+    profiles: ["observability"]
+    depends_on: [app]
+    volumes:
+      - ./ops/prometheus:/etc/prometheus:ro
+    ports:
+      - "9090:9090"
+
 volumes:
   pgdata:

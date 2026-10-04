@@ -1,0 +1,75 @@
+# What should wake someone at 2am, and what can wait for working hours.
+#
+# Paging rule of thumb: page only when customers or money are affected right now. A broken seat
+# invariant is the worst case (seats or money are wrong), so it pages immediately with no delay.
+
+groups:
+  - name: seat-reservation
+    rules:
+      - alert: SeatInvariantBroken
+        expr: seats_invariant_ok == 0
+        labels:
+          severity: page
+        annotations:
+          summary: "Seat counts don't add up for show {{ $labels.show_id }}"
+          description: >
+            available + held + confirmed != total_seats. Seats may be double-sold or lost.
+            Run GET /admin/shows/{{ $labels.show_id }}/reconcile for the failing checks, and
+            stop sales for the show until it is explained.
+
+      - alert: ServerErrors
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+            / sum(rate(http_requests_total[5m])) > 0.005
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "More than 0.5% of requests are failing with 5xx"
+          description: >
+            Declines are 4xx by design, so any steady 5xx rate is a bug or a dependency failure.
+            Check the logs for unhandled_error lines (they carry request_id) and /readyz.
+
+      - alert: ServiceDown
+        expr: up{job="seat-reservation"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Prometheus cannot scrape the service"
+          description: "The app is down or unreachable. Check the platform's deploy and restart history."
+
+      - alert: ReserveLatencyHigh
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le) (rate(http_request_duration_seconds_bucket{route="/shows/{show_id}/reserve"}[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "p99 reserve latency above 1s for 10 minutes"
+          description: >
+            Buyers are waiting. Usually database saturation: check db_pool_connections and the
+            Postgres CPU. A single hot seat alone should not cause this.
+
+      - alert: DatabasePoolSaturated
+        expr: |
+          sum(db_pool_connections{state="in_use"}) / sum(db_pool_connections{state="max"}) > 0.9
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Over 90% of database connections busy for 5 minutes"
+          description: "Requests are queueing for connections. Consider more replicas plus PgBouncer."
+
+      - alert: TransactionRetriesRising
+        expr: sum(rate(db_transaction_retries_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Postgres is aborting transactions (deadlock or serialization) more than once a second"
+          description: >
+            The fixed lock order should make deadlocks impossible, so a sustained rate means a
+            code path takes locks in a different order. Find it before it turns into 5xx.
