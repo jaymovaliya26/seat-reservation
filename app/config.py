@@ -11,6 +11,7 @@ class Settings(BaseSettings):
 
     database_url: str
     jwt_secret: SecretStr
+    jwt_ttl_s: int = Field(default=86_400, ge=60)
     admin_api_key: SecretStr
 
     # Per worker process. Workers x db_pool_max must stay below Postgres max_connections.

@@ -20,6 +20,7 @@ import pytest
 import uvicorn
 from fastapi import FastAPI
 
+from app.auth import CurrentUser
 from app.config import Settings
 from app.main import create_app
 
@@ -28,6 +29,7 @@ ADMIN_DSN = os.environ.get(
 )
 TEST_ADMIN_KEY = "test-admin-key"
 TEST_JWT_SECRET = "test-jwt-secret-with-enough-length-for-hs256"
+ADMIN_HEADERS = {"X-Admin-Key": TEST_ADMIN_KEY}
 
 
 def _with_database(dsn: str, database: str) -> str:
@@ -98,10 +100,15 @@ async def _boom() -> None:
     raise RuntimeError("deliberate failure for tests")
 
 
+async def _whoami(user_id: CurrentUser) -> dict[str, str]:
+    return {"user_id": user_id}
+
+
 @pytest.fixture(scope="session")
 async def live_server(database_url: str) -> AsyncIterator[LiveServer]:
     app = create_app(make_settings(database_url))
     app.add_api_route("/__test__/boom", _boom)
+    app.add_api_route("/__test__/whoami", _whoami)
 
     port = _free_port()
     server = uvicorn.Server(
@@ -124,3 +131,25 @@ async def live_server(database_url: str) -> AsyncIterator[LiveServer]:
 async def client(live_server: LiveServer) -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(base_url=live_server.base_url, timeout=30) as http:
         yield http
+
+
+async def bearer_for(client: httpx.AsyncClient, user_id: str) -> dict[str, str]:
+    """Authorization header for a user, via the public token endpoint."""
+    response = await client.post("/auth/token", json={"user_id": user_id})
+    assert response.status_code == 200, response.text
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+async def create_show(
+    client: httpx.AsyncClient,
+    seats: list[str],
+    price_paise: int = 25_000,
+    per_user_limit: int | None = None,
+) -> str:
+    body: dict[str, object] = {"name": "friday-night", "seats": seats, "price_paise": price_paise}
+    if per_user_limit is not None:
+        body["per_user_limit"] = per_user_limit
+    response = await client.post("/shows", json=body, headers=ADMIN_HEADERS)
+    assert response.status_code == 201, response.text
+    show_id: str = response.json()["id"]
+    return show_id

@@ -11,9 +11,10 @@ import structlog
 from fastapi import FastAPI
 
 from app import __version__
-from app.api import health
+from app.api import auth, health, shows
 from app.config import Settings
 from app.db import Database
+from app.errors import install_error_handlers
 from app.migrate import run_migrations
 from app.observability.logging import configure_logging
 from app.observability.middleware import RequestContextMiddleware
@@ -44,5 +45,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Seat Reservation", version=__version__, lifespan=lifespan)
     app.state.settings = settings
     app.add_middleware(RequestContextMiddleware)
+    install_error_handlers(app)
     app.include_router(health.router)
+    app.include_router(auth.router)
+    app.include_router(shows.router)
     return app
