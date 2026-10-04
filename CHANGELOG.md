@@ -2,7 +2,13 @@
 
 All notable changes to this project are recorded here. Releases are tagged in git.
 
-## Unreleased
+## v0.3.0 (2026-10-04): release seats and prove the books balance
+
+### Added
+- `POST /reservations/{id}/cancel`: owner-only (others get `404`), `409 already_cancelled` on a repeat. Seats return to sale at once and are released by `reservation_id`, so a stale cancel can never free a resold seat. The user's holdings go down in the same transaction.
+- `GET /reservations/{id}`: the caller's own reservation.
+- `GET /admin/shows/{id}/reconcile`: seven integrity checks in one REPEATABLE READ snapshot, each with a violation count and examples.
+- 19 new tests (104 total): racing cancels, a cancel racing 30 rebooks, four kinds of deliberate corruption that reconcile must catch, and a randomized storm of 720 concurrent reserves, retries and cancels that must end with no 5xx and balanced books.
 
 ### Fixed
 - The v0.2.0 build reported version 0.1.0 in its logs and OpenAPI document; the version was not bumped at release. A test now checks that `app.__version__` matches `pyproject.toml`.

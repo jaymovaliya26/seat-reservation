@@ -6,7 +6,7 @@ A JSON API that sells assigned seats for a show and guarantees each seat is sold
 
 **Live:** https://seat-reservation-jm.up.railway.app (Railway, Singapore)
 
-> Status: **v0.2.0**: atomic reservations, idempotency keys and a per-user seat limit. Cancellation, metrics and the burst script arrive in the next releases; see [docs/ROADMAP.md](docs/ROADMAP.md).
+> Status: **v0.3.0**: atomic reservations, idempotency keys, a per-user seat limit, owner-only cancel, and a reconcile audit. Metrics and the burst script arrive in the next releases; see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Run it locally
 
@@ -38,6 +38,9 @@ curl -s -X POST $BASE/shows/$SHOW/reserve -H "Authorization: Bearer $TOKEN" \
   -H 'Idempotency-Key: order-1' -H 'content-type: application/json' -d '{"seats":["A12"]}'
 
 curl -s $BASE/shows/$SHOW | jq .counts
+
+# Audit the show's books
+curl -s $BASE/admin/shows/$SHOW/reconcile -H "X-Admin-Key: $ADMIN_KEY" | jq '{ok, counts}'
 ```
 
 ## API
@@ -48,6 +51,9 @@ curl -s $BASE/shows/$SHOW | jq .counts
 | `POST /shows` `{"name", "seats", "price_paise", "per_user_limit"?}` | `X-Admin-Key` | `201` with every seat `available` |
 | `GET /shows/{id}` | none | Each seat's status, plus `counts` where `available + held + confirmed == total` |
 | `POST /shows/{id}/reserve` `{"seats", "idempotency_key"?}` | `Bearer` | `201` confirmed; `200` replay of the same key; `409 seat_taken` (all-or-nothing), `409 per_user_limit`, `409 idempotency_key_reused`; `422 unknown_seats`; `404` |
+| `GET /reservations/{id}` | `Bearer` | Your own reservation; anyone else's is `404` |
+| `POST /reservations/{id}/cancel` | `Bearer` | `200` with status `cancelled`, seats back on sale at once; `409 already_cancelled`; `404` if not yours |
+| `GET /admin/shows/{id}/reconcile` | `X-Admin-Key` | Audits the show's books in one consistent snapshot: `ok` plus seven checks (counts add up, no seat sold twice, seats match reservations, holdings match seats, limits, exact amounts) |
 | `GET /healthz` | none | `200` while the process is alive |
 | `GET /readyz` | none | `200` if Postgres answers within 1s, else `503` |
 
@@ -72,7 +78,9 @@ One SQL statement in [`app/services/reservations.py`](app/services/reservations.
 - **Retries book once.** The reservation insert waits on a unique `(user_id, idempotency_key)` index while a twin request is in flight, then replays it.
 - **Limits can't be raced.** A conditional upsert on the user's holdings row makes one user's parallel requests take turns.
 
-Every transaction takes its locks in the same order: idempotency key, then holdings, then seats by label.
+- **A cancel can't free someone else's seat.** Seats are released by matching their `reservation_id`, so a late or repeated cancel never touches a seat that has since been resold.
+
+Every transaction takes its locks in the same order: the idempotency key (or the reservation row for a cancel), then holdings, then seats by label.
 
 [`tests/test_concurrency.py`](tests/test_concurrency.py) proves this with 500 parallel buyers for one seat and 300 buyers with overlapping multi-seat requests; [`tests/test_idempotency.py`](tests/test_idempotency.py) and [`tests/test_user_limit.py`](tests/test_user_limit.py) cover 50 parallel retries and 10 parallel requests against a limit of 4.
 
