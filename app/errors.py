@@ -75,6 +75,10 @@ class IdempotencyKeyReused(Conflict):
     code = "idempotency_key_reused"
 
 
+class AlreadyCancelled(Conflict):
+    code = "already_cancelled"
+
+
 def error_response(
     request: Request,
     status_code: int,

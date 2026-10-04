@@ -1,4 +1,4 @@
-"""Reserving seats."""
+"""Reserving, viewing and cancelling seats."""
 
 from typing import Annotated
 from uuid import UUID
@@ -53,6 +53,32 @@ async def reserve(
         response.headers["Idempotent-Replayed"] = "true"
     structlog.contextvars.bind_contextvars(outcome="replayed" if result.replayed else "confirmed")
     return result.reservation
+
+
+@router.get("/reservations/{reservation_id}")
+async def get_reservation(
+    reservation_id: UUID, user_id: CurrentUser, request: Request
+) -> ReservationOut:
+    """Your own reservation. Someone else's is a 404, so its existence is never revealed."""
+    reservation = await reservations.get_reservation(get_pool(request), reservation_id, user_id)
+    if reservation is None:
+        raise NotFound("Reservation not found", reservation_id=str(reservation_id))
+    return reservation
+
+
+@router.post(
+    "/reservations/{reservation_id}/cancel",
+    responses={
+        404: {"description": "No such reservation, or not yours"},
+        409: {"description": "already_cancelled"},
+    },
+)
+async def cancel(reservation_id: UUID, user_id: CurrentUser, request: Request) -> ReservationOut:
+    """Cancel your own reservation. Its seats become available to anyone at once."""
+    structlog.contextvars.bind_contextvars(user_id=user_id, reservation_id=str(reservation_id))
+    result = await reservations.cancel(get_pool(request), reservation_id, user_id)
+    structlog.contextvars.bind_contextvars(outcome="cancelled")
+    return result
 
 
 def _idempotency_key(header: str | None, body: str | None) -> str | None:

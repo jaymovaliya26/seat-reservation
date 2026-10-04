@@ -19,11 +19,20 @@ import uuid
 from dataclasses import dataclass
 
 import asyncpg
+import structlog
 
 from app.db import with_retries
-from app.errors import IdempotencyKeyReused, PerUserLimit, SeatTaken
+from app.errors import (
+    AlreadyCancelled,
+    IdempotencyKeyReused,
+    NotFound,
+    PerUserLimit,
+    SeatTaken,
+)
 from app.models import ReservationOut
 from app.services.catalog import ShowInfo
+
+log = structlog.get_logger(component="reservations")
 
 _FIND_BY_KEY = """
 SELECT id, show_id, user_id, seats, amount_paise, status, created_at, request_hash
@@ -203,15 +212,101 @@ def _replay(existing: asyncpg.Record, fingerprint: bytes) -> ReserveResult:
             "This idempotency key was already used for a different request",
             reservation_id=str(existing["id"]),
         )
-    return ReserveResult(
-        reservation=ReservationOut(
-            reservation_id=existing["id"],
-            show_id=existing["show_id"],
-            user_id=existing["user_id"],
-            seats=list(existing["seats"]),
-            amount_paise=existing["amount_paise"],
-            status=existing["status"],
-            created_at=existing["created_at"],
-        ),
-        replayed=True,
+    return ReserveResult(reservation=_to_out(existing), replayed=True)
+
+
+_SELECT_RESERVATION = """
+SELECT id, show_id, user_id, seats, amount_paise, status, created_at
+  FROM reservations
+ WHERE id = $1 AND user_id = $2
+"""
+
+# Free exactly the seats this reservation holds, locking them in label order like a claim does.
+# Matching on reservation_id is what makes a cancel safe: a seat that has since been sold to
+# someone else carries their reservation_id, so it can never be freed by mistake.
+_RELEASE_SEATS = """
+WITH release AS (
+    SELECT show_id, label
+      FROM seats
+     WHERE show_id = $1
+       AND reservation_id = $2
+     ORDER BY label
+       FOR UPDATE
+)
+UPDATE seats AS s
+   SET status = 'available', reservation_id = NULL, user_id = NULL, updated_at = now()
+  FROM release
+ WHERE s.show_id = release.show_id
+   AND s.label = release.label
+RETURNING s.label
+"""
+
+
+async def get_reservation(
+    pool: asyncpg.Pool, reservation_id: uuid.UUID, user_id: str
+) -> ReservationOut | None:
+    """The reservation, if it exists and belongs to `user_id`. Otherwise None, so callers
+    answer 404 and never reveal that someone else's reservation exists."""
+    row = await pool.fetchrow(_SELECT_RESERVATION, reservation_id, user_id)
+    return None if row is None else _to_out(row)
+
+
+async def cancel(pool: asyncpg.Pool, reservation_id: uuid.UUID, user_id: str) -> ReservationOut:
+    """Cancel the caller's own reservation and return its seats to sale.
+
+    Raises NotFound (missing or not yours) or AlreadyCancelled (409).
+    """
+    return await with_retries(lambda: _cancel_once(pool, reservation_id, user_id))
+
+
+async def _cancel_once(
+    pool: asyncpg.Pool, reservation_id: uuid.UUID, user_id: str
+) -> ReservationOut:
+    async with pool.acquire() as conn, conn.transaction():
+        # Locking the reservation row makes two racing cancels take turns; the second sees
+        # 'cancelled' once the first commits.
+        row = await conn.fetchrow(_SELECT_RESERVATION + " FOR UPDATE", reservation_id, user_id)
+        if row is None:
+            raise NotFound("Reservation not found", reservation_id=str(reservation_id))
+        if row["status"] == "cancelled":
+            raise AlreadyCancelled(
+                "Reservation is already cancelled", reservation_id=str(reservation_id)
+            )
+
+        # Same lock order as a reservation: holdings first, then seats.
+        await conn.execute(
+            "UPDATE user_show_holdings SET seat_count = seat_count - $3"
+            " WHERE user_id = $1 AND show_id = $2",
+            user_id,
+            row["show_id"],
+            len(row["seats"]),
+        )
+        freed = await conn.fetch(_RELEASE_SEATS, row["show_id"], reservation_id)
+        if len(freed) != len(row["seats"]):
+            # Cannot happen while the schema constraints hold. If it does, refuse to
+            # half-cancel: raising rolls everything back, and reconcile will show why.
+            raise RuntimeError(
+                f"reservation {reservation_id} lists {len(row['seats'])} seats "
+                f"but owns {len(freed)}"
+            )
+        cancelled_at = await conn.fetchval(
+            "UPDATE reservations SET status = 'cancelled', cancelled_at = now()"
+            " WHERE id = $1 RETURNING cancelled_at",
+            reservation_id,
+        )
+    log.info(
+        "reservation_cancelled", reservation_id=str(reservation_id), cancelled_at=str(cancelled_at)
+    )
+    return _to_out(row).model_copy(update={"status": "cancelled"})
+
+
+def _to_out(row: asyncpg.Record) -> ReservationOut:
+    return ReservationOut(
+        reservation_id=row["id"],
+        show_id=row["show_id"],
+        user_id=row["user_id"],
+        seats=list(row["seats"]),
+        amount_paise=row["amount_paise"],
+        status=row["status"],
+        created_at=row["created_at"],
     )
