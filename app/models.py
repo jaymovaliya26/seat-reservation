@@ -13,6 +13,9 @@ MAX_SEATS_PER_SHOW = 50_000
 SeatLabel = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,15}$")]
 SeatStatus = Literal["available", "held", "confirmed"]
 UserId = Annotated[str, StringConstraints(pattern=USER_ID_PATTERN)]
+# Printable ASCII without spaces, so a key reads the same in a header and in a JSON body.
+IDEMPOTENCY_KEY_PATTERN = r"^[!-~]{1,128}$"
+IdempotencyKey = Annotated[str, StringConstraints(pattern=IDEMPOTENCY_KEY_PATTERN)]
 
 
 class TokenRequest(BaseModel):
@@ -40,9 +43,12 @@ class CreateShowRequest(BaseModel):
 
 
 class ReserveRequest(BaseModel):
-    # Unknown fields, such as a spoofed "user_id", are ignored: identity comes from the token.
+    # Extra fields are kept only so a spoofed "user_id" can be logged; identity comes from the
+    # token and nothing here is ever used as one.
+    model_config = ConfigDict(extra="allow")
+
     seats: Annotated[list[SeatLabel], Field(min_length=1, max_length=100)]
-    idempotency_key: Annotated[str, StringConstraints(min_length=1, max_length=128)] | None = None
+    idempotency_key: IdempotencyKey | None = None
 
     @field_validator("seats")
     @classmethod

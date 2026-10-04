@@ -1,28 +1,44 @@
 """Reserving seats."""
 
+from typing import Annotated
 from uuid import UUID
 
 import structlog
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Header, Request, Response
 
 from app.api.deps import get_catalog, get_pool
 from app.auth import CurrentUser
-from app.errors import NotFound, UnknownSeats
-from app.models import ReservationOut, ReserveRequest
+from app.errors import InvalidRequest, NotFound, UnknownSeats
+from app.models import IdempotencyKey, ReservationOut, ReserveRequest
 from app.services import reservations
 
 router = APIRouter(tags=["reservations"])
+log = structlog.get_logger(component="reservations")
 
 
 @router.post(
     "/shows/{show_id}/reserve",
     status_code=201,
-    responses={409: {"description": "Seat already taken"}},
+    responses={
+        200: {"description": "Replay of an earlier request with the same idempotency key"},
+        409: {"description": "seat_taken, per_user_limit or idempotency_key_reused"},
+    },
 )
 async def reserve(
-    show_id: UUID, body: ReserveRequest, user_id: CurrentUser, request: Request
+    show_id: UUID,
+    body: ReserveRequest,
+    user_id: CurrentUser,
+    request: Request,
+    response: Response,
+    idempotency_key_header: Annotated[
+        IdempotencyKey | None, Header(alias="Idempotency-Key")
+    ] = None,
 ) -> ReservationOut:
     structlog.contextvars.bind_contextvars(user_id=user_id, show_id=str(show_id))
+    if (body.model_extra or {}).get("user_id") not in (None, user_id):
+        log.warning("body_user_id_ignored")
+
+    key = _idempotency_key(idempotency_key_header, body.idempotency_key)
 
     show = await get_catalog(request).get(show_id)
     if show is None:
@@ -31,4 +47,23 @@ async def reserve(
     if unknown:
         raise UnknownSeats("Seats do not exist in this show: " + ", ".join(unknown), seats=unknown)
 
-    return await reservations.reserve(get_pool(request), show, user_id, body.seats)
+    result = await reservations.reserve(get_pool(request), show, user_id, body.seats, key)
+    if result.replayed:
+        response.status_code = 200
+        response.headers["Idempotent-Replayed"] = "true"
+    structlog.contextvars.bind_contextvars(outcome="replayed" if result.replayed else "confirmed")
+    return result.reservation
+
+
+def _idempotency_key(header: str | None, body: str | None) -> str | None:
+    """The key may come in the Idempotency-Key header or the body; both is fine if they agree.
+
+    Without a key the request still works, but a retry of it would book again. Rejecting it
+    would turn a client's missing header into a failed purchase, so we accept it and log it.
+    """
+    if header is not None and body is not None and header != body:
+        raise InvalidRequest("Idempotency-Key header and idempotency_key field disagree")
+    key = header or body
+    if key is None:
+        log.info("idempotency_key_missing")
+    return key

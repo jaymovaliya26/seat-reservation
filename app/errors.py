@@ -67,6 +67,14 @@ class SeatTaken(Conflict):
     code = "seat_taken"
 
 
+class PerUserLimit(Conflict):
+    code = "per_user_limit"
+
+
+class IdempotencyKeyReused(Conflict):
+    code = "idempotency_key_reused"
+
+
 def error_response(
     request: Request,
     status_code: int,
