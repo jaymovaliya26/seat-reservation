@@ -2,6 +2,11 @@
 
 All notable changes to this project are recorded here. Releases are tagged in git.
 
+## Unreleased
+
+### Fixed
+- The v0.2.0 build reported version 0.1.0 in its logs and OpenAPI document; the version was not bumped at release. A test now checks that `app.__version__` matches `pyproject.toml`.
+
 ## v0.2.0 (2026-10-04): safe retries and fair limits
 
 ### Added
