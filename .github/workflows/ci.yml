@@ -49,11 +49,10 @@ jobs:
       # The same command a reviewer runs on a fresh clone, with no .env present.
       - name: Build and start the stack
         run: docker compose up --build -d --wait
-      - name: Readiness and a smoke request
-        run: |
-          curl -fsS localhost:8000/readyz
-          curl -fsS -X POST localhost:8000/auth/token \
-            -H 'content-type: application/json' -d '{"user_id":"ci"}' > /dev/null
+      # A 20-buyer race on the real 4-worker container, then /metrics and the reconcile audit
+      # must agree with what the buyers were told.
+      - name: Smoke test (race, metrics, reconcile)
+        run: scripts/smoke.sh http://localhost:8000 local-dev-admin-key
       - name: Logs on failure
         if: failure()
         run: docker compose logs
