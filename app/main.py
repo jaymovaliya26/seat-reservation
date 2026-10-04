@@ -11,7 +11,7 @@ import structlog
 from fastapi import FastAPI
 
 from app import __version__
-from app.api import auth, health, reservations, shows
+from app.api import admin, auth, health, reservations, shows
 from app.config import Settings
 from app.db import Database
 from app.errors import install_error_handlers
@@ -52,4 +52,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth.router)
     app.include_router(shows.router)
     app.include_router(reservations.router)
+    app.include_router(admin.router)
     return app

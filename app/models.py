@@ -100,3 +100,16 @@ def _reject_duplicates(seats: list[str]) -> list[str]:
     if duplicates:
         raise ValueError(f"duplicate seats: {', '.join(sorted(duplicates)[:10])}")
     return seats
+
+
+class ReconcileCheck(BaseModel):
+    ok: bool
+    violations: int
+    examples: list[str]
+
+
+class ReconcileOut(BaseModel):
+    show_id: UUID
+    ok: bool
+    counts: SeatCounts
+    checks: dict[str, ReconcileCheck]
