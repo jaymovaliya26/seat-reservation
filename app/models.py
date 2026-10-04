@@ -36,15 +36,28 @@ class CreateShowRequest(BaseModel):
     @field_validator("seats")
     @classmethod
     def _seats_are_unique(cls, seats: list[str]) -> list[str]:
-        seen: set[str] = set()
-        duplicates: set[str] = set()
-        for seat in seats:
-            if seat in seen:
-                duplicates.add(seat)
-            seen.add(seat)
-        if duplicates:
-            raise ValueError(f"duplicate seats: {', '.join(sorted(duplicates)[:10])}")
-        return seats
+        return _reject_duplicates(seats)
+
+
+class ReserveRequest(BaseModel):
+    # Unknown fields, such as a spoofed "user_id", are ignored: identity comes from the token.
+    seats: Annotated[list[SeatLabel], Field(min_length=1, max_length=100)]
+    idempotency_key: Annotated[str, StringConstraints(min_length=1, max_length=128)] | None = None
+
+    @field_validator("seats")
+    @classmethod
+    def _seats_are_unique(cls, seats: list[str]) -> list[str]:
+        return _reject_duplicates(seats)
+
+
+class ReservationOut(BaseModel):
+    reservation_id: UUID
+    show_id: UUID
+    user_id: str
+    seats: list[str]
+    amount_paise: int
+    status: Literal["confirmed", "cancelled"]
+    created_at: datetime
 
 
 class SeatOut(BaseModel):
@@ -69,3 +82,15 @@ class ShowOut(BaseModel):
     created_at: datetime
     counts: SeatCounts
     seats: list[SeatOut]
+
+
+def _reject_duplicates(seats: list[str]) -> list[str]:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for seat in seats:
+        if seat in seen:
+            duplicates.add(seat)
+        seen.add(seat)
+    if duplicates:
+        raise ValueError(f"duplicate seats: {', '.join(sorted(duplicates)[:10])}")
+    return seats

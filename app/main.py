@@ -11,13 +11,14 @@ import structlog
 from fastapi import FastAPI
 
 from app import __version__
-from app.api import auth, health, shows
+from app.api import auth, health, reservations, shows
 from app.config import Settings
 from app.db import Database
 from app.errors import install_error_handlers
 from app.migrate import run_migrations
 from app.observability.logging import configure_logging
 from app.observability.middleware import RequestContextMiddleware
+from app.services.catalog import ShowCatalog
 
 log = structlog.get_logger(component="app")
 
@@ -35,6 +36,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await db.connect()
         await run_migrations(settings.database_url)
         app.state.db = db
+        app.state.catalog = ShowCatalog(db.pool)
         log.info("startup_complete", version=__version__)
         try:
             yield
@@ -49,4 +51,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(shows.router)
+    app.include_router(reservations.router)
     return app

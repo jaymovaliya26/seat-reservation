@@ -9,6 +9,7 @@ Every error response has the same shape, so clients (and the burst script) can b
 from collections.abc import Mapping
 from typing import Any
 
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -51,6 +52,21 @@ class NotFound(AppError):
     code = "not_found"
 
 
+class UnknownSeats(InvalidRequest):
+    code = "unknown_seats"
+
+
+class Conflict(AppError):
+    """A clean, expected decline: the request was valid but the current state says no."""
+
+    status_code = 409
+    code = "conflict"
+
+
+class SeatTaken(Conflict):
+    code = "seat_taken"
+
+
 def error_response(
     request: Request,
     status_code: int,
@@ -72,6 +88,8 @@ def error_response(
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def _app_error(request: Request, exc: AppError) -> JSONResponse:
+        # Lands on this request's access-log line, so declines can be counted by reason.
+        structlog.contextvars.bind_contextvars(error_code=exc.code)
         return error_response(
             request, exc.status_code, exc.code, exc.message, exc.headers, **exc.details
         )

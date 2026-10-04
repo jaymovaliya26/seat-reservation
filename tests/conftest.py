@@ -20,7 +20,7 @@ import pytest
 import uvicorn
 from fastapi import FastAPI
 
-from app.auth import CurrentUser
+from app.auth import CurrentUser, issue_token
 from app.config import Settings
 from app.main import create_app
 
@@ -153,3 +153,19 @@ async def create_show(
     assert response.status_code == 201, response.text
     show_id: str = response.json()["id"]
     return show_id
+
+
+_SIGNING_SETTINGS = make_settings("postgresql://unused")
+
+
+def user_headers(user_id: str) -> dict[str, str]:
+    """Authorization header signed locally with the test secret (no HTTP round trip)."""
+    return {"Authorization": f"Bearer {issue_token(user_id, _SIGNING_SETTINGS)}"}
+
+
+@pytest.fixture
+async def db(database_url: str) -> AsyncIterator[asyncpg.Connection]:
+    """Direct database access, to check what the API actually stored."""
+    conn = await asyncpg.connect(database_url)
+    yield conn
+    await conn.close()
