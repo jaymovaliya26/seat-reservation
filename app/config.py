@@ -34,9 +34,10 @@ class Settings(BaseSettings):
 
     default_per_user_limit: int = Field(default=4, ge=1)
     log_level: str = "INFO"
-    # Request log lines per second per worker; 0 means no cap. 4 workers x 100 stays under
-    # Railway's 500 lines/s per replica, beyond which it silently drops lines.
-    log_request_lines_per_second: int = Field(default=100, ge=0)
+    # Request log lines per second per worker; 0 means no cap. Railway silently drops lines
+    # above about 500/s per deployment (measured: it still dropped some at ~400/s), so
+    # 4 workers x 50 = 200/s leaves wide headroom.
+    log_request_lines_per_second: int = Field(default=50, ge=0)
 
     @model_validator(mode="after")
     def _pool_bounds(self) -> Self:

@@ -46,7 +46,7 @@ Run-to-run noise is roughly ±15%. The comparisons that matter come from back-to
 
 **3. Railway dropped most of the logs.** Railway keeps at most 500 log lines per second per replica. During the live burst it dropped about 28,800 lines, at random.
 
-*Change:* a per-worker **log budget** of 100 request lines per second, so 400 per second across the 4 workers. Server errors are always logged. Skipped lines are summarised once a second and counted in `log_lines_suppressed_total`. The same burst now writes 2,734 lines instead of 19,954, and the app spends about 10% less CPU per request.
+*Change:* a per-worker **log budget**. Server errors are always logged; skipped lines are summarised once a second and counted in `log_lines_suppressed_total`. At 100 lines/s per worker, the live burst lost 1,578 lines instead of 28,800. Two problems remained. Each worker's one-second window started at an arbitrary moment, so a worker could write up to twice its cap within one real second. And Railway dropped lines even in seconds where only about 400 were stored. The windows are now whole wall-clock seconds and the cap is 50 per worker (200/s in total). Locally the same burst writes 2,734 lines instead of 19,954, and the app spends about 10% less CPU per request.
 
 **4. Where the time goes now.** Live, the app is the bottleneck: it's CPU-bound at its 2 vCPU limit, while Postgres has headroom. Locally the same image does about 4,000 req/s, which suggests Railway's vCPUs are several times slower than a laptop core.
 

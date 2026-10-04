@@ -67,7 +67,7 @@ One JSON object per line on stdout:
 - **Request context.** `user_id`, `show_id`, `outcome` (`confirmed`, `replayed`, `cancelled`), `reservation_id` and `error_code` are attached to the request's line.
 - **Unhandled errors** log `unhandled_error` with the stack trace and the same `request_id`.
 - **Everything else is JSON too.** Gunicorn, Uvicorn and asyncpg lines use the same shape, with a `component` field.
-- **Log budget.** Railway keeps at most 500 lines per second per replica and silently drops the rest. Each worker therefore writes at most 100 request lines per second (`LOG_REQUEST_LINES_PER_SECOND`), and 5xx lines are always written. Skipped lines become one `request_lines_suppressed` summary per second with counts by status, and are counted in `log_lines_suppressed_total`. Every request is still counted in `/metrics`, and every booking is a row in Postgres.
+- **Log budget.** Railway keeps at most 500 lines per second per replica and silently drops the rest. Each worker therefore writes at most 50 request lines per second, counted in whole wall-clock seconds (`LOG_REQUEST_LINES_PER_SECOND`), and 5xx lines are always written. Skipped lines become one `request_lines_suppressed` summary per second with counts by status, and are counted in `log_lines_suppressed_total`. Every request is still counted in `/metrics`, and every booking is a row in Postgres.
 
 ## Health
 

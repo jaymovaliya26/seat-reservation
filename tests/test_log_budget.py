@@ -40,3 +40,17 @@ def test_a_new_second_resets_the_cap_and_flushes_the_summary() -> None:
 def test_zero_means_no_cap() -> None:
     budget = LogBudget(per_second=0, clock=FakeClock())
     assert all(budget.allow(409) for _ in range(10_000))
+
+
+def test_windows_are_wall_clock_seconds() -> None:
+    """A window that started mid-second must not let a worker write twice its cap in one second."""
+    clock = FakeClock()
+    clock.now = 10.6
+    budget = LogBudget(per_second=2, clock=clock)
+    assert [budget.allow(409) for _ in range(3)] == [True, True, False]
+
+    clock.now = 10.99  # same wall-clock second: still capped
+    assert budget.allow(409) is False
+
+    clock.now = 11.0  # next second: fresh allowance
+    assert budget.allow(409) is True

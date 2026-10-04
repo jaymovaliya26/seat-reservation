@@ -20,11 +20,15 @@ log = structlog.get_logger(component="http")
 
 
 class LogBudget:
-    def __init__(self, per_second: int, clock: Callable[[], float] = time.monotonic) -> None:
-        """`per_second` <= 0 means no cap."""
+    def __init__(self, per_second: int, clock: Callable[[], float] = time.time) -> None:
+        """`per_second` <= 0 means no cap.
+
+        Windows are whole wall-clock seconds, the way the platform counts. A window that started
+        at an arbitrary moment would let a worker write up to twice its cap within one real second.
+        """
         self.per_second = per_second
         self._clock = clock
-        self._window_start = clock()
+        self._second = int(clock())
         self._used = 0
         self._skipped: Counter[int] = Counter()
 
@@ -56,8 +60,8 @@ class LogBudget:
             self._roll_window()
 
     def _roll_window(self) -> None:
-        now = self._clock()
-        if now - self._window_start >= 1.0:
+        second = int(self._clock())
+        if second != self._second:
             self.flush()
-            self._window_start = now
+            self._second = second
             self._used = 0

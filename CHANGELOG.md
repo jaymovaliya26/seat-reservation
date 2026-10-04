@@ -2,6 +2,11 @@
 
 All notable changes to this project are recorded here. Releases are tagged in git.
 
+## Unreleased
+
+### Fixed
+- The log budget still let Railway drop 1,578 lines in a live burst: per-worker windows started at arbitrary moments, so a worker could write twice its cap within one wall-clock second. Windows are now whole wall-clock seconds, and the default cap is 50 lines/s per worker (200/s in total).
+
 ## v0.5.0 (2026-10-04): ready for the stampede
 
 ### Added
