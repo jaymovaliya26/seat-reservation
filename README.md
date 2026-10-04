@@ -6,7 +6,7 @@ A JSON API that sells assigned seats for a show and guarantees each seat is sold
 
 **Live:** https://seat-reservation-jm.up.railway.app (Railway, Singapore)
 
-> Status: **v0.1.0**, the MVP. Idempotency keys, per-user limits, cancellation, metrics and the burst script arrive in the next releases; see [docs/ROADMAP.md](docs/ROADMAP.md).
+> Status: **v0.2.0**: atomic reservations, idempotency keys and a per-user seat limit. Cancellation, metrics and the burst script arrive in the next releases; see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Run it locally
 
@@ -33,8 +33,9 @@ TOKEN=$(curl -s -X POST $BASE/auth/token -H 'content-type: application/json' \
 SHOW=$(curl -s -X POST $BASE/shows -H "X-Admin-Key: $ADMIN_KEY" -H 'content-type: application/json' \
   -d '{"name":"friday-night","seats":["A11","A12","A13"],"price_paise":25000}' | jq -r .id)
 
+# Send it twice: the retry returns the same reservation with 200 and books nothing new.
 curl -s -X POST $BASE/shows/$SHOW/reserve -H "Authorization: Bearer $TOKEN" \
-  -H 'content-type: application/json' -d '{"seats":["A12"]}'
+  -H 'Idempotency-Key: order-1' -H 'content-type: application/json' -d '{"seats":["A12"]}'
 
 curl -s $BASE/shows/$SHOW | jq .counts
 ```
@@ -46,9 +47,13 @@ curl -s $BASE/shows/$SHOW | jq .counts
 | `POST /auth/token` `{"user_id"}` | none | A signed JWT for that user. Stands in for an identity provider so load tests can act as many users. |
 | `POST /shows` `{"name", "seats", "price_paise", "per_user_limit"?}` | `X-Admin-Key` | `201` with every seat `available` |
 | `GET /shows/{id}` | none | Each seat's status, plus `counts` where `available + held + confirmed == total` |
-| `POST /shows/{id}/reserve` `{"seats"}` | `Bearer` | `201` confirmed, or `409 seat_taken` (all-or-nothing), `422 unknown_seats`, `404` |
+| `POST /shows/{id}/reserve` `{"seats", "idempotency_key"?}` | `Bearer` | `201` confirmed; `200` replay of the same key; `409 seat_taken` (all-or-nothing), `409 per_user_limit`, `409 idempotency_key_reused`; `422 unknown_seats`; `404` |
 | `GET /healthz` | none | `200` while the process is alive |
 | `GET /readyz` | none | `200` if Postgres answers within 1s, else `503` |
+
+The idempotency key can go in the `Idempotency-Key` header or the `idempotency_key` field. Keys are scoped per user. A retry with the same key returns the original reservation (`200`, header `Idempotent-Replayed: true`); the same key with different seats is `409`. A request without a key still works but is not retry-safe.
+
+Each user may hold at most `per_user_limit` seats per show (default 4), enforced even when the user sends many requests in parallel.
 
 Money is always integer paise; `250.5`, `25000.0` and `"25000"` are rejected. Identity comes only from the token: a `user_id` in a request body is ignored. Every error has the same shape:
 
@@ -64,8 +69,12 @@ One SQL statement in [`app/services/reservations.py`](app/services/reservations.
 - **No deadlocks.** Every transaction locks seats in the same order.
 - **All or nothing.** If any requested seat is gone, the transaction rolls back and the buyer holds nothing.
 - **The database enforces it too.** One row per seat, and a CHECK constraint ties status to exactly one owner.
+- **Retries book once.** The reservation insert waits on a unique `(user_id, idempotency_key)` index while a twin request is in flight, then replays it.
+- **Limits can't be raced.** A conditional upsert on the user's holdings row makes one user's parallel requests take turns.
 
-[`tests/test_concurrency.py`](tests/test_concurrency.py) proves this with 500 parallel buyers for one seat and 300 buyers with overlapping multi-seat requests.
+Every transaction takes its locks in the same order: idempotency key, then holdings, then seats by label.
+
+[`tests/test_concurrency.py`](tests/test_concurrency.py) proves this with 500 parallel buyers for one seat and 300 buyers with overlapping multi-seat requests; [`tests/test_idempotency.py`](tests/test_idempotency.py) and [`tests/test_user_limit.py`](tests/test_user_limit.py) cover 50 parallel retries and 10 parallel requests against a limit of 4.
 
 ## Development
 

@@ -2,6 +2,18 @@
 
 All notable changes to this project are recorded here. Releases are tagged in git.
 
+## v0.2.0 (2026-10-04): safe retries and fair limits
+
+### Added
+- Idempotency keys (`Idempotency-Key` header or `idempotency_key` field), scoped per user. A retry returns the original reservation with `200` and `Idempotent-Replayed: true`; the same key with a different request is `409 idempotency_key_reused`. Exactly once even when the retries race, via a unique index the second insert waits on.
+- Per-user seat limit per show (`per_user_limit`, default 4): `409 per_user_limit` with `limit`, `held` and `requested`, enforced by a conditional upsert on the user's holdings row.
+- Automatic retry of transactions Postgres aborts as a deadlock or serialization failure.
+- Migrations 0002 and 0003, expand-only and backward compatible: the v0.1 code passes the full suite on the new schema, and existing bookings are backfilled.
+- 16 new tests (85 total), including 50 parallel retries and 10 parallel requests on a limit of 4.
+
+### Changed
+- A `user_id` in a reserve body that differs from the token is now logged (still ignored).
+
 ## v0.1.0 (2026-10-04): MVP, live
 
 Live at https://seat-reservation-jm.up.railway.app (Railway, Singapore).
