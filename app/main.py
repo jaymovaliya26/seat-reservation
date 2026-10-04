@@ -18,6 +18,7 @@ from app.db import Database
 from app.errors import install_error_handlers
 from app.migrate import run_migrations
 from app.observability import metrics as app_metrics
+from app.observability.log_budget import LogBudget
 from app.observability.logging import configure_logging
 from app.observability.middleware import RequestContextMiddleware
 from app.services.catalog import ShowCatalog
@@ -39,18 +40,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await run_migrations(settings.database_url)
         app.state.db = db
         app.state.catalog = ShowCatalog(db.pool)
-        pool_sampler = asyncio.create_task(app_metrics.sample_pool(db.pool))
+        background = [
+            asyncio.create_task(app_metrics.sample_pool(db.pool)),
+            asyncio.create_task(log_budget.flush_every_second()),
+        ]
         log.info("startup_complete", version=__version__)
         try:
             yield
         finally:
             log.info("shutdown_started")
-            pool_sampler.cancel()
+            for task in background:
+                task.cancel()
+            log_budget.flush()
             await db.close()
 
     app = FastAPI(title="Seat Reservation", version=__version__, lifespan=lifespan)
     app.state.settings = settings
-    app.add_middleware(RequestContextMiddleware)
+    log_budget = LogBudget(per_second=settings.log_request_lines_per_second)
+    app.add_middleware(RequestContextMiddleware, log_budget=log_budget)
     install_error_handlers(app)
     app.include_router(health.router)
     app.include_router(auth.router)

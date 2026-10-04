@@ -77,6 +77,16 @@ DB_TX_RETRIES = Counter(
     "Transactions retried after a deadlock or serialization failure",
     ["sqlstate"],
 )
+RESERVE_WITHOUT_KEY = Counter(
+    "reserve_requests_without_idempotency_key", "Reserve requests that sent no idempotency key"
+)
+SPOOFED_USER_ID = Counter(
+    "spoofed_user_id", "Requests whose body named a user other than the token's (ignored)"
+)
+LOG_LINES_SUPPRESSED = Counter(
+    "log_lines_suppressed",
+    "Request log lines skipped by the per-worker cap (every request is still in http_requests)",
+)
 APP_INFO = Gauge("app_info", "Running version", ["version"], multiprocess_mode="max")
 
 # Pre-create every reason so a decline counter reads 0, not "missing", before its first use.

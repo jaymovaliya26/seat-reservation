@@ -1,4 +1,5 @@
-"""Per-request context: a request ID on every response and one structured log line per request."""
+"""Per-request context: a request ID on every response and a structured log line per request
+(within the per-worker log budget)."""
 
 import re
 import time
@@ -9,6 +10,7 @@ import structlog
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.observability import metrics
+from app.observability.log_budget import LogBudget
 
 REQUEST_ID_HEADER = b"x-request-id"
 _VALID_REQUEST_ID = re.compile(rb"^[A-Za-z0-9._:-]{1,128}$")
@@ -25,8 +27,9 @@ class RequestContextMiddleware:
     own error handler sits outside user middleware and would drop that header.
     """
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, log_budget: LogBudget | None = None) -> None:
         self.app = app
+        self.log_budget = log_budget or LogBudget(per_second=0)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -68,7 +71,7 @@ class RequestContextMiddleware:
             route = getattr(scope.get("route"), "path", "unmatched")
             metrics.HTTP_REQUESTS.labels(scope["method"], route, str(status)).inc()
             metrics.HTTP_DURATION.labels(scope["method"], route).observe(elapsed)
-            if scope["path"] not in _QUIET_PATHS:
+            if scope["path"] not in _QUIET_PATHS and self.log_budget.allow(status):
                 log.info(
                     "request",
                     method=scope["method"],

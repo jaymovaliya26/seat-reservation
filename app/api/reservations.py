@@ -14,7 +14,6 @@ from app.observability import metrics
 from app.services import reservations
 
 router = APIRouter(tags=["reservations"])
-log = structlog.get_logger(component="reservations")
 
 
 @router.post(
@@ -37,7 +36,10 @@ async def reserve(
 ) -> ReservationOut:
     structlog.contextvars.bind_contextvars(user_id=user_id, show_id=str(show_id))
     if (body.model_extra or {}).get("user_id") not in (None, user_id):
-        log.warning("body_user_id_ignored")
+        # Recorded on the request's log line and counted, not logged separately: an attacker
+        # sending thousands of these must not be able to flood the logs.
+        metrics.SPOOFED_USER_ID.inc()
+        structlog.contextvars.bind_contextvars(body_user_id_ignored=True)
 
     try:
         key = _idempotency_key(idempotency_key_header, body.idempotency_key)
@@ -107,5 +109,6 @@ def _idempotency_key(header: str | None, body: str | None) -> str | None:
         raise InvalidRequest("Idempotency-Key header and idempotency_key field disagree")
     key = header or body
     if key is None:
-        log.info("idempotency_key_missing")
+        metrics.RESERVE_WITHOUT_KEY.inc()
+        structlog.contextvars.bind_contextvars(idempotency_key="missing")
     return key
