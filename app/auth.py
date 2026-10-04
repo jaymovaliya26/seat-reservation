@@ -10,7 +10,8 @@ import time
 from typing import Annotated, cast
 
 import jwt
-from fastapi import Depends, Request
+from fastapi import Depends, Request, Security
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 
 from app.config import Settings
 from app.errors import Forbidden, Unauthorized
@@ -47,21 +48,39 @@ def _settings(request: Request) -> Settings:
     return cast(Settings, request.app.state.settings)
 
 
-async def current_user(request: Request) -> str:
-    header = request.headers.get("authorization")
-    if not header:
+# Declared as OpenAPI security schemes, so Swagger UI shows an Authorize button and sends them.
+# auto_error=False: we answer missing or bad credentials ourselves, in the standard error format.
+bearer_scheme = HTTPBearer(
+    scheme_name="BearerAuth",
+    bearerFormat="JWT",
+    description="A token from POST /auth/token. Paste only the token; Swagger adds 'Bearer '.",
+    auto_error=False,
+)
+admin_key_scheme = APIKeyHeader(
+    name="X-Admin-Key",
+    scheme_name="AdminKey",
+    description="Admin key, needed only to create shows and run the reconcile audit.",
+    auto_error=False,
+)
+
+
+async def current_user(
+    request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Security(bearer_scheme)],
+) -> str:
+    if credentials is None:
+        if request.headers.get("authorization"):
+            raise Unauthorized("Authorization header must be 'Bearer <token>'")
         raise Unauthorized("Missing bearer token")
-    scheme, _, token = header.partition(" ")
-    if scheme.lower() != "bearer" or not token.strip():
-        raise Unauthorized("Authorization header must be 'Bearer <token>'")
     try:
-        return verify_token(token.strip(), _settings(request))
+        return verify_token(credentials.credentials.strip(), _settings(request))
     except jwt.InvalidTokenError:
         raise Unauthorized("Token is invalid or expired") from None
 
 
-async def require_admin(request: Request) -> None:
-    given = request.headers.get("x-admin-key")
+async def require_admin(
+    request: Request, given: Annotated[str | None, Security(admin_key_scheme)]
+) -> None:
     if given is None:
         raise Unauthorized("Missing X-Admin-Key header")
     expected = _settings(request).admin_api_key.get_secret_value()

@@ -5,7 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 
-router = APIRouter(tags=["health"])
+router = APIRouter(tags=["operations"])
 
 CheckState = Literal["ok", "down"]
 
@@ -19,13 +19,17 @@ class Readiness(BaseModel):
     checks: dict[str, CheckState]
 
 
-@router.get("/healthz")
+@router.get("/healthz", summary="Liveness")
 async def healthz() -> Liveness:
     """The process is up and serving. Never touches the database."""
     return Liveness()
 
 
-@router.get("/readyz", responses={503: {"model": Readiness}})
+@router.get(
+    "/readyz",
+    summary="Readiness",
+    responses={503: {"model": Readiness, "description": "Postgres unreachable"}},
+)
 async def readyz(request: Request, response: Response) -> Readiness:
     """Postgres answers within the timeout. Fails closed with 503 otherwise."""
     database_ok: bool = await request.app.state.db.ping()

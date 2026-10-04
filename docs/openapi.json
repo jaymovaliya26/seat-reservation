@@ -1,0 +1,1720 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Seat Reservation API",
+    "description": "\nSells assigned seats for a show and guarantees each seat is sold exactly once, even when\nthousands of buyers want the same seat in the same second.\n\n**Try it from this page**\n\n1. `POST /auth/token` with `{\"user_id\": \"alice\"}`, then copy `access_token`.\n2. Click **Authorize**: paste the token under **BearerAuth**, and the admin key under\n   **AdminKey** (only needed to create shows and run the audit).\n3. `POST /shows` to create a show, then `POST /shows/{show_id}/reserve`.\n4. `GET /shows/{show_id}` shows every seat: `available + held + confirmed == total` always holds.\n\n**Rules worth knowing**\n\n- Identity comes only from the token; a `user_id` in a request body is ignored.\n- Money is integer paise; a float or string price is rejected.\n- A multi-seat request is all-or-nothing.\n- The same idempotency key returns the same reservation (`200` replay); the same key with\n  other seats is `409`.\n- Every error has the same shape, `{\"error\": {\"code\", \"message\", ...}, \"request_id\"}`.\n  Declines are `409`, never `5xx`. If the database is unreachable: `503` with `Retry-After`.\n\nSource, write-up and the one-command burst:\n[github.com/jaymovaliya26/seat-reservation](https://github.com/jaymovaliya26/seat-reservation)\n",
+    "version": "1.1.0"
+  },
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Liveness",
+        "description": "The process is up and serving. Never touches the database.",
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Liveness"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Readiness",
+        "description": "Postgres answers within the timeout. Fails closed with 503 otherwise.",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Postgres unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/token": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Get a token for a test user",
+        "operationId": "create_token_auth_token_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request is malformed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                },
+                "examples": {
+                  "invalid body": {
+                    "value": {
+                      "error": {
+                        "code": "invalid_request",
+                        "message": "The request is not valid",
+                        "problems": [
+                          {
+                            "field": "body.price_paise",
+                            "problem": "Input should be a valid integer"
+                          }
+                        ]
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "unknown seats": {
+                    "value": {
+                      "error": {
+                        "code": "unknown_seats",
+                        "message": "Seats do not exist in this show: Z9",
+                        "seats": [
+                          "Z9"
+                        ]
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/shows": {
+      "post": {
+        "tags": [
+          "shows"
+        ],
+        "summary": "Create a show (admin)",
+        "operationId": "create_show_shows_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateShowRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShowOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token (or missing admin key)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                },
+                "examples": {
+                  "missing token": {
+                    "value": {
+                      "error": {
+                        "code": "unauthorized",
+                        "message": "Missing bearer token"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "expired token": {
+                    "value": {
+                      "error": {
+                        "code": "unauthorized",
+                        "message": "Token is invalid or expired"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Wrong admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                },
+                "examples": {
+                  "wrong key": {
+                    "value": {
+                      "error": {
+                        "code": "forbidden",
+                        "message": "Invalid admin key"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request is malformed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                },
+                "examples": {
+                  "invalid body": {
+                    "value": {
+                      "error": {
+                        "code": "invalid_request",
+                        "message": "The request is not valid",
+                        "problems": [
+                          {
+                            "field": "body.price_paise",
+                            "problem": "Input should be a valid integer"
+                          }
+                        ]
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "unknown seats": {
+                    "value": {
+                      "error": {
+                        "code": "unknown_seats",
+                        "message": "Seats do not exist in this show: Z9",
+                        "seats": [
+                          "Z9"
+                        ]
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unreachable or overloaded; retry with the same key after `Retry-After` seconds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                },
+                "examples": {
+                  "unavailable": {
+                    "value": {
+                      "error": {
+                        "code": "database_unavailable",
+                        "message": "The database is unreachable; retry shortly with the same idempotency key"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "busy": {
+                    "value": {
+                      "error": {
+                        "code": "database_busy",
+                        "message": "The database is overloaded; retry shortly with the same idempotency key"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "AdminKey": []
+          }
+        ]
+      }
+    },
+    "/shows/{show_id}": {
+      "get": {
+        "tags": [
+          "shows"
+        ],
+        "summary": "Read a show's seat map",
+        "operationId": "get_show_shows__show_id__get",
+        "parameters": [
+          {
+            "name": "show_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Show Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShowOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (including another user's reservation)",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "not found": {
+                    "value": {
+                      "error": {
+                        "code": "not_found",
+                        "message": "Show not found"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request is malformed",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "invalid body": {
+                    "value": {
+                      "error": {
+                        "code": "invalid_request",
+                        "message": "The request is not valid",
+                        "problems": [
+                          {
+                            "field": "body.price_paise",
+                            "problem": "Input should be a valid integer"
+                          }
+                        ]
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "unknown seats": {
+                    "value": {
+                      "error": {
+                        "code": "unknown_seats",
+                        "message": "Seats do not exist in this show: Z9",
+                        "seats": [
+                          "Z9"
+                        ]
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unreachable or overloaded; retry with the same key after `Retry-After` seconds",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "unavailable": {
+                    "value": {
+                      "error": {
+                        "code": "database_unavailable",
+                        "message": "The database is unreachable; retry shortly with the same idempotency key"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "busy": {
+                    "value": {
+                      "error": {
+                        "code": "database_busy",
+                        "message": "The database is overloaded; retry shortly with the same idempotency key"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/shows/{show_id}/reserve": {
+      "post": {
+        "tags": [
+          "reservations"
+        ],
+        "summary": "Reserve seats",
+        "operationId": "reserve_shows__show_id__reserve_post",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "show_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Show Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[!-~]{1,128}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Makes retries safe. May instead go in the body as idempotency_key.",
+              "title": "Idempotency-Key"
+            },
+            "description": "Makes retries safe. May instead go in the body as idempotency_key."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReserveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservationOut"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Replay of an earlier request with the same idempotency key (header Idempotent-Replayed: true). Nothing new is booked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservationOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token (or missing admin key)",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "missing token": {
+                    "value": {
+                      "error": {
+                        "code": "unauthorized",
+                        "message": "Missing bearer token"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "expired token": {
+                    "value": {
+                      "error": {
+                        "code": "unauthorized",
+                        "message": "Token is invalid or expired"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (including another user's reservation)",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "not found": {
+                    "value": {
+                      "error": {
+                        "code": "not_found",
+                        "message": "Show not found"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A clean decline: the request was valid, but the current state says no",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "seat_taken": {
+                    "value": {
+                      "error": {
+                        "code": "seat_taken",
+                        "message": "Seats already taken: A12",
+                        "seats": [
+                          "A12"
+                        ]
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "per_user_limit": {
+                    "value": {
+                      "error": {
+                        "code": "per_user_limit",
+                        "message": "At most 4 seats per user for this show",
+                        "limit": 4,
+                        "held": 3,
+                        "requested": 2
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "idempotency_key_reused": {
+                    "value": {
+                      "error": {
+                        "code": "idempotency_key_reused",
+                        "message": "This idempotency key was already used for a different request",
+                        "reservation_id": "0b6f2f6e-6a1e-4b8e-9d3a-2c7f1e5a9b10"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "already_cancelled": {
+                    "value": {
+                      "error": {
+                        "code": "already_cancelled",
+                        "message": "Reservation is already cancelled"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request is malformed",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "invalid body": {
+                    "value": {
+                      "error": {
+                        "code": "invalid_request",
+                        "message": "The request is not valid",
+                        "problems": [
+                          {
+                            "field": "body.price_paise",
+                            "problem": "Input should be a valid integer"
+                          }
+                        ]
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "unknown seats": {
+                    "value": {
+                      "error": {
+                        "code": "unknown_seats",
+                        "message": "Seats do not exist in this show: Z9",
+                        "seats": [
+                          "Z9"
+                        ]
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unreachable or overloaded; retry with the same key after `Retry-After` seconds",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "unavailable": {
+                    "value": {
+                      "error": {
+                        "code": "database_unavailable",
+                        "message": "The database is unreachable; retry shortly with the same idempotency key"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "busy": {
+                    "value": {
+                      "error": {
+                        "code": "database_busy",
+                        "message": "The database is overloaded; retry shortly with the same idempotency key"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reservations/{reservation_id}": {
+      "get": {
+        "tags": [
+          "reservations"
+        ],
+        "summary": "View your reservation",
+        "description": "Your own reservation. Someone else's is a 404, so its existence is never revealed.",
+        "operationId": "get_reservation_reservations__reservation_id__get",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "reservation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Reservation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservationOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token (or missing admin key)",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "missing token": {
+                    "value": {
+                      "error": {
+                        "code": "unauthorized",
+                        "message": "Missing bearer token"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "expired token": {
+                    "value": {
+                      "error": {
+                        "code": "unauthorized",
+                        "message": "Token is invalid or expired"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (including another user's reservation)",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "not found": {
+                    "value": {
+                      "error": {
+                        "code": "not_found",
+                        "message": "Show not found"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request is malformed",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "invalid body": {
+                    "value": {
+                      "error": {
+                        "code": "invalid_request",
+                        "message": "The request is not valid",
+                        "problems": [
+                          {
+                            "field": "body.price_paise",
+                            "problem": "Input should be a valid integer"
+                          }
+                        ]
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "unknown seats": {
+                    "value": {
+                      "error": {
+                        "code": "unknown_seats",
+                        "message": "Seats do not exist in this show: Z9",
+                        "seats": [
+                          "Z9"
+                        ]
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unreachable or overloaded; retry with the same key after `Retry-After` seconds",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "unavailable": {
+                    "value": {
+                      "error": {
+                        "code": "database_unavailable",
+                        "message": "The database is unreachable; retry shortly with the same idempotency key"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "busy": {
+                    "value": {
+                      "error": {
+                        "code": "database_busy",
+                        "message": "The database is overloaded; retry shortly with the same idempotency key"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reservations/{reservation_id}/cancel": {
+      "post": {
+        "tags": [
+          "reservations"
+        ],
+        "summary": "Cancel your reservation",
+        "description": "Cancel your own reservation. Its seats become available to anyone at once.",
+        "operationId": "cancel_reservations__reservation_id__cancel_post",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "reservation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Reservation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservationOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token (or missing admin key)",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "missing token": {
+                    "value": {
+                      "error": {
+                        "code": "unauthorized",
+                        "message": "Missing bearer token"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "expired token": {
+                    "value": {
+                      "error": {
+                        "code": "unauthorized",
+                        "message": "Token is invalid or expired"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (including another user's reservation)",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "not found": {
+                    "value": {
+                      "error": {
+                        "code": "not_found",
+                        "message": "Show not found"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A clean decline: the request was valid, but the current state says no",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "seat_taken": {
+                    "value": {
+                      "error": {
+                        "code": "seat_taken",
+                        "message": "Seats already taken: A12",
+                        "seats": [
+                          "A12"
+                        ]
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "per_user_limit": {
+                    "value": {
+                      "error": {
+                        "code": "per_user_limit",
+                        "message": "At most 4 seats per user for this show",
+                        "limit": 4,
+                        "held": 3,
+                        "requested": 2
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "idempotency_key_reused": {
+                    "value": {
+                      "error": {
+                        "code": "idempotency_key_reused",
+                        "message": "This idempotency key was already used for a different request",
+                        "reservation_id": "0b6f2f6e-6a1e-4b8e-9d3a-2c7f1e5a9b10"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "already_cancelled": {
+                    "value": {
+                      "error": {
+                        "code": "already_cancelled",
+                        "message": "Reservation is already cancelled"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request is malformed",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "invalid body": {
+                    "value": {
+                      "error": {
+                        "code": "invalid_request",
+                        "message": "The request is not valid",
+                        "problems": [
+                          {
+                            "field": "body.price_paise",
+                            "problem": "Input should be a valid integer"
+                          }
+                        ]
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "unknown seats": {
+                    "value": {
+                      "error": {
+                        "code": "unknown_seats",
+                        "message": "Seats do not exist in this show: Z9",
+                        "seats": [
+                          "Z9"
+                        ]
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unreachable or overloaded; retry with the same key after `Retry-After` seconds",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "unavailable": {
+                    "value": {
+                      "error": {
+                        "code": "database_unavailable",
+                        "message": "The database is unreachable; retry shortly with the same idempotency key"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "busy": {
+                    "value": {
+                      "error": {
+                        "code": "database_busy",
+                        "message": "The database is overloaded; retry shortly with the same idempotency key"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/shows/{show_id}/reconcile": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Audit a show's books",
+        "description": "Cross-check seats, reservations and per-user counters for one show. `ok` is false if\nanything disagrees, with up to five examples per failing check.",
+        "operationId": "reconcile_admin_shows__show_id__reconcile_get",
+        "security": [
+          {
+            "AdminKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "show_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Show Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconcileOut"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token (or missing admin key)",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "missing token": {
+                    "value": {
+                      "error": {
+                        "code": "unauthorized",
+                        "message": "Missing bearer token"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "expired token": {
+                    "value": {
+                      "error": {
+                        "code": "unauthorized",
+                        "message": "Token is invalid or expired"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Wrong admin key",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "wrong key": {
+                    "value": {
+                      "error": {
+                        "code": "forbidden",
+                        "message": "Invalid admin key"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (including another user's reservation)",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "not found": {
+                    "value": {
+                      "error": {
+                        "code": "not_found",
+                        "message": "Show not found"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request is malformed",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "invalid body": {
+                    "value": {
+                      "error": {
+                        "code": "invalid_request",
+                        "message": "The request is not valid",
+                        "problems": [
+                          {
+                            "field": "body.price_paise",
+                            "problem": "Input should be a valid integer"
+                          }
+                        ]
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "unknown seats": {
+                    "value": {
+                      "error": {
+                        "code": "unknown_seats",
+                        "message": "Seats do not exist in this show: Z9",
+                        "seats": [
+                          "Z9"
+                        ]
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unreachable or overloaded; retry with the same key after `Retry-After` seconds",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "unavailable": {
+                    "value": {
+                      "error": {
+                        "code": "database_unavailable",
+                        "message": "The database is unreachable; retry shortly with the same idempotency key"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  },
+                  "busy": {
+                    "value": {
+                      "error": {
+                        "code": "database_busy",
+                        "message": "The database is overloaded; retry shortly with the same idempotency key"
+                      },
+                      "request_id": "9f2c4a1e0b7d4c55a3e1f0d2b6c8e4a7"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Prometheus metrics",
+        "operationId": "scrape_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Prometheus text format, summed across all workers",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CreateShowRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "seats": {
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,15}$"
+            },
+            "type": "array",
+            "maxItems": 50000,
+            "minItems": 1,
+            "title": "Seats"
+          },
+          "price_paise": {
+            "type": "integer",
+            "maximum": 1000000000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Price Paise"
+          },
+          "per_user_limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per User Limit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "seats",
+          "price_paise"
+        ],
+        "title": "CreateShowRequest",
+        "examples": [
+          {
+            "name": "friday-night",
+            "per_user_limit": 4,
+            "price_paise": 25000,
+            "seats": [
+              "A1",
+              "A2",
+              "A3",
+              "A11",
+              "A12",
+              "A13"
+            ]
+          }
+        ]
+      },
+      "ErrorBody": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorInfo"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error",
+          "request_id"
+        ],
+        "title": "ErrorBody"
+      },
+      "ErrorInfo": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ErrorInfo"
+      },
+      "Liveness": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status",
+            "default": "ok"
+          }
+        },
+        "type": "object",
+        "title": "Liveness"
+      },
+      "Readiness": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "unavailable"
+            ],
+            "title": "Status"
+          },
+          "checks": {
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "ok",
+                "down"
+              ]
+            },
+            "type": "object",
+            "title": "Checks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "checks"
+        ],
+        "title": "Readiness"
+      },
+      "ReconcileCheck": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "violations": {
+            "type": "integer",
+            "title": "Violations"
+          },
+          "examples": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Examples"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "violations",
+          "examples"
+        ],
+        "title": "ReconcileCheck"
+      },
+      "ReconcileOut": {
+        "properties": {
+          "show_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Show Id"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/SeatCounts"
+          },
+          "checks": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ReconcileCheck"
+            },
+            "type": "object",
+            "title": "Checks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "show_id",
+          "ok",
+          "counts",
+          "checks"
+        ],
+        "title": "ReconcileOut"
+      },
+      "ReservationOut": {
+        "properties": {
+          "reservation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Reservation Id"
+          },
+          "show_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Show Id"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "seats": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Seats"
+          },
+          "amount_paise": {
+            "type": "integer",
+            "title": "Amount Paise"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reservation_id",
+          "show_id",
+          "user_id",
+          "seats",
+          "amount_paise",
+          "status",
+          "created_at"
+        ],
+        "title": "ReservationOut"
+      },
+      "ReserveRequest": {
+        "properties": {
+          "seats": {
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,15}$"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Seats"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[!-~]{1,128}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "seats"
+        ],
+        "title": "ReserveRequest",
+        "examples": [
+          {
+            "idempotency_key": "order-7f3a",
+            "seats": [
+              "A12"
+            ]
+          }
+        ]
+      },
+      "SeatCounts": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "available": {
+            "type": "integer",
+            "title": "Available"
+          },
+          "held": {
+            "type": "integer",
+            "title": "Held"
+          },
+          "confirmed": {
+            "type": "integer",
+            "title": "Confirmed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "available",
+          "held",
+          "confirmed"
+        ],
+        "title": "SeatCounts"
+      },
+      "SeatOut": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "held",
+              "confirmed"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "status"
+        ],
+        "title": "SeatOut"
+      },
+      "ShowOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "price_paise": {
+            "type": "integer",
+            "title": "Price Paise"
+          },
+          "per_user_limit": {
+            "type": "integer",
+            "title": "Per User Limit"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/SeatCounts"
+          },
+          "seats": {
+            "items": {
+              "$ref": "#/components/schemas/SeatOut"
+            },
+            "type": "array",
+            "title": "Seats"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "price_paise",
+          "per_user_limit",
+          "created_at",
+          "counts",
+          "seats"
+        ],
+        "title": "ShowOut"
+      },
+      "TokenRequest": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,63}$",
+            "title": "User Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_id"
+        ],
+        "title": "TokenRequest",
+        "examples": [
+          {
+            "user_id": "alice"
+          }
+        ]
+      },
+      "TokenResponse": {
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "title": "Access Token"
+          },
+          "token_type": {
+            "type": "string",
+            "const": "bearer",
+            "title": "Token Type",
+            "default": "bearer"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "access_token",
+          "expires_in",
+          "user_id"
+        ],
+        "title": "TokenResponse"
+      }
+    },
+    "securitySchemes": {
+      "AdminKey": {
+        "type": "apiKey",
+        "description": "Admin key, needed only to create shows and run the reconcile audit.",
+        "in": "header",
+        "name": "X-Admin-Key"
+      },
+      "BearerAuth": {
+        "type": "http",
+        "description": "A token from POST /auth/token. Paste only the token; Swagger adds 'Bearer '.",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "auth",
+      "description": "Test-user tokens. Stands in for an identity provider."
+    },
+    {
+      "name": "shows",
+      "description": "Create a show (admin) and read its seat map."
+    },
+    {
+      "name": "reservations",
+      "description": "Reserve, view and cancel seats."
+    },
+    {
+      "name": "admin",
+      "description": "Operator endpoints."
+    },
+    {
+      "name": "operations",
+      "description": "Health, readiness and Prometheus metrics."
+    }
+  ]
+}

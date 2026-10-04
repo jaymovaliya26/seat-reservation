@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request
 
 from app.api.deps import get_pool
+from app.api.openapi import errors
 from app.auth import require_admin
 from app.errors import NotFound
 from app.models import ReconcileOut
@@ -13,7 +14,11 @@ from app.services import reconcile as reconcile_service
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
 
-@router.get("/shows/{show_id}/reconcile")
+@router.get(
+    "/shows/{show_id}/reconcile",
+    summary="Audit a show's books",
+    responses=errors(401, 403, 404, 422, 503),
+)
 async def reconcile(show_id: UUID, request: Request) -> ReconcileOut:
     """Cross-check seats, reservations and per-user counters for one show. `ok` is false if
     anything disagrees, with up to five examples per failing check."""

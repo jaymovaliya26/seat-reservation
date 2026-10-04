@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install db run up logs test lint fmt typecheck check down burst smoke
+.PHONY: help install db run up logs test lint fmt typecheck check down burst smoke openapi
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -40,6 +40,9 @@ burst: ## On-sale stampede + correctness report: make burst URL=http://localhost
 
 smoke: ## Quick 20-buyer race + metrics + audit: make smoke URL=... KEY=...
 	./scripts/smoke.sh $(or $(URL),http://localhost:8000) $(or $(KEY),local-dev-admin-key)
+
+openapi: ## Regenerate docs/openapi.json from the code
+	uv run python scripts/export_openapi.py
 
 down: ## Stop containers
 	docker compose down

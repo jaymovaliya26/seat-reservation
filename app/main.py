@@ -13,6 +13,7 @@ from fastapi import FastAPI
 
 from app import __version__
 from app.api import admin, auth, health, metrics, reservations, shows
+from app.api.openapi import DESCRIPTION, SWAGGER_UI_PARAMETERS, TAGS
 from app.config import Settings
 from app.db import Database
 from app.errors import install_error_handlers
@@ -54,7 +55,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             log_budget.flush()
             await db.close()
 
-    app = FastAPI(title="Seat Reservation", version=__version__, lifespan=lifespan)
+    app = FastAPI(
+        title="Seat Reservation API",
+        version=__version__,
+        description=DESCRIPTION,
+        openapi_tags=TAGS,
+        swagger_ui_parameters=SWAGGER_UI_PARAMETERS,
+        lifespan=lifespan,
+    )
     app.state.settings = settings
     log_budget = LogBudget(per_second=settings.log_request_lines_per_second)
     app.add_middleware(RequestContextMiddleware, log_budget=log_budget)

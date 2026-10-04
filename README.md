@@ -10,6 +10,7 @@ A JSON API that sells assigned seats for a show and guarantees each seat is sold
 |---|---|
 | **Live URL** | https://seat-reservation-jm.up.railway.app (Railway, Singapore) |
 | **One-command burst** | `./scripts/burst.sh https://seat-reservation-jm.up.railway.app <ADMIN_KEY>` |
+| **API docs** | [Swagger UI](https://seat-reservation-jm.up.railway.app/docs) (try every endpoint; **Authorize** takes the token and admin key), [ReDoc](https://seat-reservation-jm.up.railway.app/redoc), and the spec in [`docs/openapi.json`](docs/openapi.json) (OpenAPI 3.1, importable into Postman or Insomnia) |
 | **Metrics** | https://seat-reservation-jm.up.railway.app/metrics |
 | **Health** | [`/healthz`](https://seat-reservation-jm.up.railway.app/healthz) (process alive), [`/readyz`](https://seat-reservation-jm.up.railway.app/readyz) (Postgres reachable, else 503) |
 | **Logs** | JSON on stdout with `request_id`; a recording of the live logs during a burst is linked in the submission email |
@@ -80,6 +81,8 @@ curl -s $BASE/admin/shows/$SHOW/reconcile -H "X-Admin-Key: $ADMIN_KEY" | jq '{ok
 
 ## API
 
+Interactive docs: [`/docs`](https://seat-reservation-jm.up.railway.app/docs) (Swagger UI) and [`/redoc`](https://seat-reservation-jm.up.railway.app/redoc). The spec is committed as [`docs/openapi.json`](docs/openapi.json); regenerate it with `make openapi` (a test fails if it falls out of date).
+
 | Endpoint | Auth | Result |
 |---|---|---|
 | `POST /auth/token` `{"user_id"}` | none | A signed JWT for that user. Stands in for an identity provider so load tests can act as many users. |
@@ -141,7 +144,7 @@ Details, including what pages at 2am: [docs/OBSERVABILITY.md](docs/OBSERVABILITY
 | [`tests/`](tests) | 128 tests against a real Postgres, including 500-connection races |
 | [`scripts/burst.sh`](scripts/burst.sh), [`scripts/smoke.sh`](scripts/smoke.sh) | Load and correctness checks for any deployment |
 | [`ops/prometheus/`](ops/prometheus) | Alert rules and a local Prometheus |
-| [`docs/`](docs) | Observability, performance, roadmap, AI usage log |
+| [`docs/`](docs) | OpenAPI spec, observability, performance, roadmap, AI usage log |
 
 ## Development
 
@@ -150,6 +153,7 @@ make install     # uv sync
 make test        # starts Postgres in Docker (port 5433), runs pytest
 make check       # lint, type check, tests: what CI runs
 make up          # full stack in Docker, as deployed
+make openapi     # regenerate docs/openapi.json
 make run         # API with auto-reload on :8000
 ```
 

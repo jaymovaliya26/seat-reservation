@@ -8,13 +8,14 @@ given; what it guarantees is that every other endpoint trusts only the signed to
 from fastapi import APIRouter, Request
 
 from app.api.deps import get_settings
+from app.api.openapi import errors
 from app.auth import issue_token
 from app.models import TokenRequest, TokenResponse
 
 router = APIRouter(tags=["auth"])
 
 
-@router.post("/auth/token")
+@router.post("/auth/token", summary="Get a token for a test user", responses=errors(422))
 async def create_token(body: TokenRequest, request: Request) -> TokenResponse:
     settings = get_settings(request)
     return TokenResponse(

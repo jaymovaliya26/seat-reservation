@@ -7,6 +7,7 @@ import structlog
 from fastapi import APIRouter, Header, Request, Response
 
 from app.api.deps import get_catalog, get_pool
+from app.api.openapi import errors
 from app.auth import CurrentUser
 from app.errors import AppError, InvalidRequest, NotFound, UnknownSeats
 from app.models import IdempotencyKey, ReservationOut, ReserveRequest
@@ -19,9 +20,14 @@ router = APIRouter(tags=["reservations"])
 @router.post(
     "/shows/{show_id}/reserve",
     status_code=201,
+    summary="Reserve seats",
     responses={
-        200: {"description": "Replay of an earlier request with the same idempotency key"},
-        409: {"description": "seat_taken, per_user_limit or idempotency_key_reused"},
+        200: {
+            "model": ReservationOut,
+            "description": "Replay of an earlier request with the same idempotency key "
+            "(header Idempotent-Replayed: true). Nothing new is booked.",
+        },
+        **errors(401, 404, 409, 422, 503),
     },
 )
 async def reserve(
@@ -31,7 +37,11 @@ async def reserve(
     request: Request,
     response: Response,
     idempotency_key_header: Annotated[
-        IdempotencyKey | None, Header(alias="Idempotency-Key")
+        IdempotencyKey | None,
+        Header(
+            alias="Idempotency-Key",
+            description="Makes retries safe. May instead go in the body as idempotency_key.",
+        ),
     ] = None,
 ) -> ReservationOut:
     structlog.contextvars.bind_contextvars(user_id=user_id, show_id=str(show_id))
@@ -71,7 +81,11 @@ async def reserve(
     return result.reservation
 
 
-@router.get("/reservations/{reservation_id}")
+@router.get(
+    "/reservations/{reservation_id}",
+    summary="View your reservation",
+    responses=errors(401, 404, 422, 503),
+)
 async def get_reservation(
     reservation_id: UUID, user_id: CurrentUser, request: Request
 ) -> ReservationOut:
@@ -84,10 +98,8 @@ async def get_reservation(
 
 @router.post(
     "/reservations/{reservation_id}/cancel",
-    responses={
-        404: {"description": "No such reservation, or not yours"},
-        409: {"description": "already_cancelled"},
-    },
+    summary="Cancel your reservation",
+    responses=errors(401, 404, 409, 422, 503),
 )
 async def cancel(reservation_id: UUID, user_id: CurrentUser, request: Request) -> ReservationOut:
     """Cancel your own reservation. Its seats become available to anyone at once."""

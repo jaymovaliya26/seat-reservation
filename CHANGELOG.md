@@ -2,6 +2,14 @@
 
 All notable changes to this project are recorded here. Releases are tagged in git.
 
+## v1.1.0 (2026-10-04): interactive API docs
+
+### Added
+- Swagger UI at `/docs` and ReDoc at `/redoc`, with a short guide, request examples, and every error response documented in the real error format with examples.
+- **Authorize works:** the bearer token (`BearerAuth`) and the admin key (`AdminKey`) are declared as OpenAPI security schemes, so "Try it out" sends them. Behaviour is unchanged: the same status codes and messages.
+- `docs/openapi.json` (OpenAPI 3.1, validated) and `make openapi`. A test fails if the committed spec falls out of date.
+- `/metrics` and the health probes are listed under an "operations" tag.
+
 ## v1.0.0 (2026-10-04): submission
 
 Live at https://seat-reservation-jm.up.railway.app. Final live burst: 20,000 requests, 1,369 req/s, p99 1.0 s, 0 × 5xx, 25/25 checks. A fresh clone runs with no setup; a hard restart is back in about 2 s.

@@ -16,7 +16,7 @@
 | Reconciliation: `available + held + confirmed == total` | **Held in every snapshot** taken during the burst, and at the end |
 | Metrics vs responses | **`/metrics` deltas equal the client-observed outcomes, exactly** |
 | Resilience | Hard restart of the live app → ready again in about 2 s. Postgres stopped under the Docker stack → `503` with `Retry-After`, recovers without a restart. Two instances sharing Postgres, as in a deploy overlap (local) → no 5xx |
-| Delivery | 6 tagged releases, each deployed and verified live; 128 tests against a real Postgres; CI on every push |
+| Delivery | 7 tagged releases, each deployed and verified live; 132 tests against a real Postgres; CI on every push; interactive API docs at `/docs` |
 
 ## How I approached it
 

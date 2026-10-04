@@ -19,6 +19,8 @@ IdempotencyKey = Annotated[str, StringConstraints(pattern=IDEMPOTENCY_KEY_PATTER
 
 
 class TokenRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{"user_id": "alice"}]})
+
     user_id: UserId
 
 
@@ -30,6 +32,19 @@ class TokenResponse(BaseModel):
 
 
 class CreateShowRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "name": "friday-night",
+                    "seats": ["A1", "A2", "A3", "A11", "A12", "A13"],
+                    "price_paise": 25000,
+                    "per_user_limit": 4,
+                }
+            ]
+        }
+    )
+
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
     seats: Annotated[list[SeatLabel], Field(min_length=1, max_length=MAX_SEATS_PER_SHOW)]
     # StrictInt: money is integer paise. 25000.0 or "25000" is rejected, not coerced.
@@ -45,7 +60,10 @@ class CreateShowRequest(BaseModel):
 class ReserveRequest(BaseModel):
     # Extra fields are kept only so a spoofed "user_id" can be logged; identity comes from the
     # token and nothing here is ever used as one.
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(
+        extra="allow",
+        json_schema_extra={"examples": [{"seats": ["A12"], "idempotency_key": "order-7f3a"}]},
+    )
 
     seats: Annotated[list[SeatLabel], Field(min_length=1, max_length=100)]
     idempotency_key: IdempotencyKey | None = None
