@@ -26,7 +26,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:-local-dev-jwt-secret-not-for-production}
       ADMIN_API_KEY: ${ADMIN_API_KEY:-local-dev-admin-key}
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
-      DB_POOL_MAX: ${DB_POOL_MAX:-15}
+      DB_POOL_MAX: ${DB_POOL_MAX:-8}
+      DB_POOL_MIN: ${DB_POOL_MIN:-8}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "8000:8000"

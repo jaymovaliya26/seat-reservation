@@ -21,6 +21,10 @@ timeout = 60
 # The app writes its own JSON line per request.
 accesslog = None
 
+# Gunicorn's runtime control socket is unused here, and the app user has no home directory to
+# put it in.
+control_socket_disable = True
+
 
 def on_starting(server: object) -> None:
     """Runs once in the master, before any worker starts."""

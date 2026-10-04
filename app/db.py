@@ -14,10 +14,14 @@ log = structlog.get_logger(component="db")
 
 _CONNECT_ERRORS = (OSError, asyncpg.PostgresError, asyncpg.InterfaceError)
 
-# Postgres aborts a transaction with one of these when it must break a deadlock or cannot
-# serialize it. The transaction did nothing, so running it again is safe. Our fixed lock order
-# should prevent both; this is the backstop that keeps a surprise from becoming a 500.
-_RETRYABLE = (asyncpg.DeadlockDetectedError, asyncpg.SerializationError)
+# Errors after which running the whole operation again is safe, because nothing happened:
+# - Postgres aborts a transaction to break a deadlock or when it cannot serialize it. Our fixed
+#   lock order should prevent both; this is the backstop that keeps a surprise from being a 500.
+# - Postgres refuses a new connection (full, or starting up). Pools are opened in full at
+#   startup, so this only happens while a connection is being replaced, e.g. after a restart.
+_ABORTED = (asyncpg.DeadlockDetectedError, asyncpg.SerializationError)
+_REFUSED = (asyncpg.TooManyConnectionsError, asyncpg.CannotConnectNowError)
+_RETRYABLE = _ABORTED + _REFUSED
 
 
 async def with_retries[T](run: Callable[[], Awaitable[T]], attempts: int = 3) -> T:
@@ -29,15 +33,18 @@ async def with_retries[T](run: Callable[[], Awaitable[T]], attempts: int = 3) ->
                 raise
             metrics.DB_TX_RETRIES.labels(sqlstate=exc.sqlstate).inc()
             log.warning("transaction_retry", attempt=attempt, sqlstate=exc.sqlstate)
-            await asyncio.sleep(random.uniform(0.005, 0.02) * attempt)
+            # A refused connection needs longer to clear than a lost lock race.
+            base = 0.05 if isinstance(exc, _REFUSED) else 0.005
+            await asyncio.sleep(random.uniform(base, base * 3) * attempt)
     raise AssertionError("unreachable")
 
 
 class Database:
     """Owns the asyncpg pools for one worker process.
 
-    `pool` serves API traffic. `health_pool` is a separate two-connection pool used only by the
-    readiness probe, so a saturated main pool cannot make a healthy database look down.
+    `pool` serves API traffic. `health_pool` is a separate pool used only by the
+    readiness probe (one connection), so a saturated main pool cannot make a healthy
+    database look down.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -84,7 +91,7 @@ class Database:
                 self._health_pool = await asyncpg.create_pool(
                     s.database_url,
                     min_size=1,
-                    max_size=2,
+                    max_size=1,
                     timeout=5,
                     server_settings=self._server_settings("seat-reservation-health"),
                 )
