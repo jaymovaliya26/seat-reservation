@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install db run test lint fmt typecheck check down
+.PHONY: help install db run up logs test lint fmt typecheck check down
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -12,6 +12,12 @@ db: ## Start Postgres only (host port 5433)
 
 run: db ## Run the API locally with auto-reload on :8000
 	uv run uvicorn app.main:create_app --factory --reload --port 8000
+
+up: ## Build and run the full stack (app on :8000) exactly as deployed
+	docker compose up --build -d --wait
+
+logs: ## Follow the app's logs
+	docker compose logs -f app
 
 test: db ## Run the test suite against the compose Postgres
 	uv run pytest
