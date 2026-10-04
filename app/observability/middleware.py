@@ -8,6 +8,8 @@ import orjson
 import structlog
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.observability import metrics
+
 REQUEST_ID_HEADER = b"x-request-id"
 _VALID_REQUEST_ID = re.compile(rb"^[A-Za-z0-9._:-]{1,128}$")
 # Probes that would drown the useful lines under load.
@@ -60,15 +62,20 @@ class RequestContextMiddleware:
             status = 500
             await _send_internal_error(send, request_id)
         finally:
+            elapsed = time.perf_counter() - start
+            # The route template ("/shows/{show_id}/reserve"), never the raw path, so metric
+            # labels stay few no matter how many shows exist.
+            route = getattr(scope.get("route"), "path", "unmatched")
+            metrics.HTTP_REQUESTS.labels(scope["method"], route, str(status)).inc()
+            metrics.HTTP_DURATION.labels(scope["method"], route).observe(elapsed)
             if scope["path"] not in _QUIET_PATHS:
-                route = scope.get("route")
                 log.info(
                     "request",
                     method=scope["method"],
                     path=scope["path"],
-                    route=getattr(route, "path", None),
+                    route=route,
                     status=status,
-                    duration_ms=round((time.perf_counter() - start) * 1000, 2),
+                    duration_ms=round(elapsed * 1000, 2),
                 )
             structlog.contextvars.clear_contextvars()
 

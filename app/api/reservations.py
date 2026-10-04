@@ -8,8 +8,9 @@ from fastapi import APIRouter, Header, Request, Response
 
 from app.api.deps import get_catalog, get_pool
 from app.auth import CurrentUser
-from app.errors import InvalidRequest, NotFound, UnknownSeats
+from app.errors import AppError, InvalidRequest, NotFound, UnknownSeats
 from app.models import IdempotencyKey, ReservationOut, ReserveRequest
+from app.observability import metrics
 from app.services import reservations
 
 router = APIRouter(tags=["reservations"])
@@ -38,20 +39,33 @@ async def reserve(
     if (body.model_extra or {}).get("user_id") not in (None, user_id):
         log.warning("body_user_id_ignored")
 
-    key = _idempotency_key(idempotency_key_header, body.idempotency_key)
+    try:
+        key = _idempotency_key(idempotency_key_header, body.idempotency_key)
+        show = await get_catalog(request).get(show_id)
+        if show is None:
+            raise NotFound("Show not found", show_id=str(show_id))
+        unknown = sorted(set(body.seats) - show.seat_labels)
+        if unknown:
+            raise UnknownSeats(
+                "Seats do not exist in this show: " + ", ".join(unknown), seats=unknown
+            )
+        result = await reservations.reserve(get_pool(request), show, user_id, body.seats, key)
+    except AppError as exc:
+        metrics.RESERVATIONS_DECLINED.labels(reason=exc.code).inc()
+        raise
 
-    show = await get_catalog(request).get(show_id)
-    if show is None:
-        raise NotFound("Show not found", show_id=str(show_id))
-    unknown = sorted(set(body.seats) - show.seat_labels)
-    if unknown:
-        raise UnknownSeats("Seats do not exist in this show: " + ", ".join(unknown), seats=unknown)
-
-    result = await reservations.reserve(get_pool(request), show, user_id, body.seats, key)
     if result.replayed:
+        # Counted as a decline: the request was answered, but nothing new was booked.
+        metrics.RESERVATIONS_DECLINED.labels(reason="idempotent_replay").inc()
         response.status_code = 200
         response.headers["Idempotent-Replayed"] = "true"
-    structlog.contextvars.bind_contextvars(outcome="replayed" if result.replayed else "confirmed")
+        structlog.contextvars.bind_contextvars(outcome="replayed")
+    else:
+        metrics.RESERVATIONS_CONFIRMED.inc()
+        metrics.SEATS_SOLD.inc(len(result.reservation.seats))
+        structlog.contextvars.bind_contextvars(
+            outcome="confirmed", reservation_id=str(result.reservation.reservation_id)
+        )
     return result.reservation
 
 
@@ -77,6 +91,8 @@ async def cancel(reservation_id: UUID, user_id: CurrentUser, request: Request) -
     """Cancel your own reservation. Its seats become available to anyone at once."""
     structlog.contextvars.bind_contextvars(user_id=user_id, reservation_id=str(reservation_id))
     result = await reservations.cancel(get_pool(request), reservation_id, user_id)
+    metrics.RESERVATIONS_CANCELLED.inc()
+    metrics.SEATS_RELEASED.inc(len(result.seats))
     structlog.contextvars.bind_contextvars(outcome="cancelled")
     return result
 

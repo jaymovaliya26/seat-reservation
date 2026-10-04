@@ -14,7 +14,8 @@ FROM python:3.12-slim
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PORT=8000
+    PORT=8000 \
+    PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
 RUN useradd --system --uid 10001 --no-create-home app
 WORKDIR /app
 COPY --from=build /opt/venv /opt/venv

@@ -8,6 +8,7 @@ import asyncpg
 import structlog
 
 from app.config import Settings
+from app.observability import metrics
 
 log = structlog.get_logger(component="db")
 
@@ -26,6 +27,7 @@ async def with_retries[T](run: Callable[[], Awaitable[T]], attempts: int = 3) ->
         except _RETRYABLE as exc:
             if attempt == attempts:
                 raise
+            metrics.DB_TX_RETRIES.labels(sqlstate=exc.sqlstate).inc()
             log.warning("transaction_retry", attempt=attempt, sqlstate=exc.sqlstate)
             await asyncio.sleep(random.uniform(0.005, 0.02) * attempt)
     raise AssertionError("unreachable")

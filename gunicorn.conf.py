@@ -20,3 +20,29 @@ timeout = 60
 
 # The app writes its own JSON line per request.
 accesslog = None
+
+
+def on_starting(server: object) -> None:
+    """Runs once in the master, before any worker starts."""
+    import shutil
+    from pathlib import Path
+
+    from app.observability.logging import configure_logging
+
+    # The master's own lines (boot, worker exits, signals) in the same JSON as the app's.
+    configure_logging(os.environ.get("LOG_LEVEL", "INFO"))
+
+    # Workers share counters through files in this directory. Start each boot from zero, so a
+    # restart never mixes in counts from a previous run.
+    metrics_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+    if metrics_dir:
+        shutil.rmtree(metrics_dir, ignore_errors=True)
+        Path(metrics_dir).mkdir(parents=True, exist_ok=True)
+
+
+def child_exit(server: object, worker: object) -> None:
+    """A worker exited: drop its live gauges (counters keep their totals)."""
+    if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+        from prometheus_client import multiprocess
+
+        multiprocess.mark_process_dead(worker.pid)  # type: ignore[attr-defined]

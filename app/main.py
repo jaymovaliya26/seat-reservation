@@ -4,6 +4,7 @@ Gunicorn runs `app.main:create_app()`; locally, `uvicorn app.main:create_app --f
 A factory keeps imports free of side effects, so tests can build an app with their own settings.
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -11,11 +12,12 @@ import structlog
 from fastapi import FastAPI
 
 from app import __version__
-from app.api import admin, auth, health, reservations, shows
+from app.api import admin, auth, health, metrics, reservations, shows
 from app.config import Settings
 from app.db import Database
 from app.errors import install_error_handlers
 from app.migrate import run_migrations
+from app.observability import metrics as app_metrics
 from app.observability.logging import configure_logging
 from app.observability.middleware import RequestContextMiddleware
 from app.services.catalog import ShowCatalog
@@ -37,11 +39,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await run_migrations(settings.database_url)
         app.state.db = db
         app.state.catalog = ShowCatalog(db.pool)
+        pool_sampler = asyncio.create_task(app_metrics.sample_pool(db.pool))
         log.info("startup_complete", version=__version__)
         try:
             yield
         finally:
             log.info("shutdown_started")
+            pool_sampler.cancel()
             await db.close()
 
     app = FastAPI(title="Seat Reservation", version=__version__, lifespan=lifespan)
@@ -53,4 +57,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(shows.router)
     app.include_router(reservations.router)
     app.include_router(admin.router)
+    app.include_router(metrics.router)
     return app
