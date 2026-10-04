@@ -9,11 +9,32 @@ Every error response has the same shape, so clients (and the burst script) can b
 from collections.abc import Mapping
 from typing import Any
 
+import asyncpg
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+log = structlog.get_logger(component="errors")
+
+# The database can't be reached right now (network partition, restart, connections exhausted).
+# We fail closed (refuse, never guess from a cache) and say so clearly: 503 with Retry-After.
+# A client retrying with the same idempotency key can never book twice.
+DATABASE_UNAVAILABLE: tuple[type[Exception], ...] = (
+    asyncpg.PostgresConnectionError,
+    asyncpg.CannotConnectNowError,
+    asyncpg.TooManyConnectionsError,
+    # Reconnecting during an outage fails at the socket level: DNS no longer resolves, the host
+    # is unreachable, the connection is refused or times out. The only network I/O on a request
+    # path here is Postgres, so any OSError in a handler means the database is unreachable.
+    OSError,
+)
+# The database answered but gave up: statement_timeout or lock_timeout. Overload, not a bug.
+DATABASE_BUSY: tuple[type[Exception], ...] = (
+    asyncpg.QueryCanceledError,
+    asyncpg.LockNotAvailableError,
+)
 
 
 class AppError(Exception):
@@ -115,6 +136,31 @@ def install_error_handlers(app: FastAPI) -> None:
         return error_response(
             request, 422, "invalid_request", "The request is not valid", problems=problems
         )
+
+    async def _database_unavailable(request: Request, exc: Exception) -> JSONResponse:
+        log.warning("database_unavailable", error=type(exc).__name__)
+        return error_response(
+            request,
+            503,
+            "database_unavailable",
+            "The database is unreachable; retry shortly with the same idempotency key",
+            {"Retry-After": "1"},
+        )
+
+    async def _database_busy(request: Request, exc: Exception) -> JSONResponse:
+        log.warning("database_busy", error=type(exc).__name__)
+        return error_response(
+            request,
+            503,
+            "database_busy",
+            "The database is overloaded; retry shortly with the same idempotency key",
+            {"Retry-After": "1"},
+        )
+
+    for exc_class in DATABASE_UNAVAILABLE:
+        app.add_exception_handler(exc_class, _database_unavailable)
+    for exc_class in DATABASE_BUSY:
+        app.add_exception_handler(exc_class, _database_busy)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
