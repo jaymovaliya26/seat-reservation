@@ -1,6 +1,8 @@
-"""Postgres connection pools."""
+"""Postgres connection pools, and retries for transactions Postgres asks us to repeat."""
 
 import asyncio
+import random
+from collections.abc import Awaitable, Callable
 
 import asyncpg
 import structlog
@@ -10,6 +12,23 @@ from app.config import Settings
 log = structlog.get_logger(component="db")
 
 _CONNECT_ERRORS = (OSError, asyncpg.PostgresError, asyncpg.InterfaceError)
+
+# Postgres aborts a transaction with one of these when it must break a deadlock or cannot
+# serialize it. The transaction did nothing, so running it again is safe. Our fixed lock order
+# should prevent both; this is the backstop that keeps a surprise from becoming a 500.
+_RETRYABLE = (asyncpg.DeadlockDetectedError, asyncpg.SerializationError)
+
+
+async def with_retries[T](run: Callable[[], Awaitable[T]], attempts: int = 3) -> T:
+    for attempt in range(1, attempts + 1):
+        try:
+            return await run()
+        except _RETRYABLE as exc:
+            if attempt == attempts:
+                raise
+            log.warning("transaction_retry", attempt=attempt, sqlstate=exc.sqlstate)
+            await asyncio.sleep(random.uniform(0.005, 0.02) * attempt)
+    raise AssertionError("unreachable")
 
 
 class Database:
