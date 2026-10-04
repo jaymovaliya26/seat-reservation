@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install db run up logs test lint fmt typecheck check down
+.PHONY: help install db run up logs test lint fmt typecheck check down burst smoke
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -34,6 +34,12 @@ typecheck: ## Static type check
 	uv run mypy app
 
 check: lint typecheck test ## Everything CI runs
+
+burst: ## On-sale stampede + correctness report: make burst URL=http://localhost:8000 KEY=...
+	./scripts/burst.sh $(or $(URL),http://localhost:8000) $(or $(KEY),local-dev-admin-key)
+
+smoke: ## Quick 20-buyer race + metrics + audit: make smoke URL=... KEY=...
+	./scripts/smoke.sh $(or $(URL),http://localhost:8000) $(or $(KEY),local-dev-admin-key)
 
 down: ## Stop containers
 	docker compose down
